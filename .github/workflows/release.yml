@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag must match workspace version
+        run: |
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          WS_VERSION="$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)"
+          echo "tag=$TAG_VERSION workspace=$WS_VERSION"
+          [ "$TAG_VERSION" = "$WS_VERSION" ] || { echo "::error::tag v$TAG_VERSION != workspace $WS_VERSION"; exit 1; }
+
+  binaries:
+    needs: version-check
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-musl, name: linux_amd64 }
+          - { target: aarch64-unknown-linux-musl, name: linux_arm64 }
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - run: cargo build --release --target ${{ matrix.target }} --workspace
+      - name: Smoke
+        run: |
+          ./target/${{ matrix.target }}/release/zionstatsd --version
+          ./target/${{ matrix.target }}/release/zionstats-tui --version
+      - name: Zip
+        shell: python
+        run: |
+          import os, zipfile
+          version = os.environ["GITHUB_REF_NAME"].lstrip("v")
+          name = "${{ matrix.name }}"
+          target = os.environ["matrix_target"]
+          zpath = f"zionstats_{version}_{name}.zip"
+          with zipfile.ZipFile(zpath, "w", zipfile.ZIP_DEFLATED) as z:
+              for b in ("zionstats", "zionstatsd", "zionstats-tui"):
+                  z.write(f"target/{target}/release/{b}", b)
+              for f in ("README.md", "LICENSE", "NOTICE", "CHANGELOG.md"):
+                  z.write(f, f)
+        env:
+          matrix_target: ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bin-${{ matrix.name }}
+          path: zionstats_*.zip
+
+  publish:
+    needs: [binaries, version-check]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Checksums + release
+        run: |
+          mkdir -p release
+          find artifacts -type f | while read f; do cp "$f" release/; done
+          cd release && sha256sum * > checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release/*.zip
+            release/checksums.txt
+          body: |
+            Static musl binaries. Needs the NVIDIA driver for live metrics;
+            `zionstats --demo` works anywhere. See CHANGELOG.md.

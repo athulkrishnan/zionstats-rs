@@ -54,6 +54,51 @@ impl ShmWriter {
         &self.path
     }
 
+    /// Test/bench constructor over an arbitrary path (doc-hidden: the
+    /// daemon always uses `create`). Takes the flock like `create` does.
+    #[doc(hidden)]
+    pub fn create_at(path: &Path) -> Result<ShmWriter, ShmError> {
+        use std::os::unix::fs::OpenOptionsExt;
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .mode(0o600)
+            .open(path)?;
+        if file.metadata()?.len() != TOTAL_SIZE as u64 {
+            file.set_len(TOTAL_SIZE as u64)?;
+        }
+        if !flock_exclusive(&file)? {
+            return Err(ShmError::Mismatch(format!(
+                "another zionstats writer holds {}",
+                path.display()
+            )));
+        }
+        let mut map = unsafe { memmap2::MmapMut::map_mut(&file)? };
+        *header_mut(&mut map) = ShmHeaderV1 {
+            magic: *SHM_MAGIC,
+            abi_tag: ABI_TAG,
+            layout_version: LAYOUT_VERSION,
+            total_size: TOTAL_SIZE as u64,
+            seqlock: 0,
+            daemon_pid: std::process::id(),
+            uid: 0,
+            start_ms: now_ms(),
+            tick_id: 0,
+            gpu_count: 0,
+            proc_count: 0,
+            interval_ms: 0,
+            flags: 0,
+            _pad: [0; 56],
+        };
+        Ok(ShmWriter {
+            file,
+            map,
+            path: path.to_path_buf(),
+        })
+    }
+
     /// Create (or reclaim) the shm file for `uid` and take the advisory
     /// writer lock. Mode 0600: same-uid readers only, unless the daemon
     /// chown/chmods to `shm_group` afterwards.

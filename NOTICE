@@ -1,0 +1,12 @@
+zionstats-rs
+Copyright 2026 Athul Krishnan
+
+Ideas credited (no third-party code used in this repository):
+  - btop (Apache-2.0, Aristocratos) and nvitop (TUI GPL-3.0 / api
+    Apache-2.0, Xuehai Pan) for TUI concept credit. Clean-room
+    implementations; the btop graph-engine port lives in the sibling
+    Python project, not here.
+  - nvtop (GPL-3.0) for panel layout concepts.
+  - nvitop-exporter for the embedded-Prometheus-endpoint idea (metric
+    family names kept compatible so existing Grafana boards work).
+  - DCGM exporter label style (label compatibility only).
