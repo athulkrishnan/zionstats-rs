@@ -76,9 +76,7 @@ fn main() {
         };
         zionstats_daemon::daemon::run(opts)
     } else {
-        // P6: attach the shared-memory TUI. Until then, point at the daemon.
-        eprintln!("zionstats-tui lands in v0.5 P6 -- meanwhile: `zionstatsd --demo` publishes SHM");
-        0
+        run_tui_mode(&cli)
     };
     std::process::exit(exit);
 }
