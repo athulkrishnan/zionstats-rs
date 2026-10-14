@@ -34,8 +34,11 @@ jobs:
         with:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
-      - run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - run: cargo build --release --target ${{ matrix.target }} --workspace
+      - run: sudo apt-get update && sudo apt-get install -y musl-tools gcc-aarch64-linux-gnu
+      - name: Build static binaries
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
+        run: cargo build --release --target ${{ matrix.target }} --workspace
       - name: Smoke
         run: |
           ./target/${{ matrix.target }}/release/zionstatsd --version
