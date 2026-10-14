@@ -26,7 +26,7 @@ ambient_temp = 30.0   # static ambient (weather layer lands in v0.6)
 enabled = false       # smart-plug blower automation (same schema as Python)
 mode = "off"
 
-[[cooling.plugs]]
+# [[cooling.plugs]]
 # backend = "shelly"  # shelly | tasmota (tuya/kasa stay on the Python daemon)
 # name = "blower"
 # host = "192.168.1.50"
