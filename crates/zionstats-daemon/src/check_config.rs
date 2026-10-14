@@ -2,7 +2,7 @@
 //! fallback warnings. Pure introspection -- NEVER builds the control stack
 //! (which would init NVML and write fan PWM).
 
-use zionstats_core::config::{self, Config};
+use zionstats_core::config::Config;
 use zionstats_core::control::{CoolingMode, Trigger};
 
 pub fn print_resolved(cfg: &Config, warnings: &[String], overrides: &[String]) -> i32 {
