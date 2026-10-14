@@ -17,5 +17,7 @@ zionstats-core = { workspace = true, features = ["nvml"] }
 zionstats-daemon = { workspace = true, features = ["nvml"] }
 zionstats-tui.workspace = true
 clap.workspace = true
+clap_complete.workspace = true
 log.workspace = true
 env_logger.workspace = true
+libc.workspace = true

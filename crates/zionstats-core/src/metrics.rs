@@ -17,6 +17,7 @@ pub struct MetricsInput<'a> {
     pub version: &'a str,
     pub uptime_s: u64,
     pub last_publish_age_ms: u64,
+    pub watchdog_pings: u64,
     pub expose_processes: bool,
 }
 
@@ -293,6 +294,15 @@ pub fn render_metrics(m: &MetricsInput, openmetrics: bool) -> String {
         vec![format!("zionstats_daemon_uptime_seconds {}", m.uptime_s)],
     ));
     out.push((
+        "daemon_watchdog_pings_total".to_string(),
+        "sd_notify watchdog pings since daemon start".to_string(),
+        "counter",
+        vec![format!(
+            "zionstats_daemon_watchdog_pings_total {}",
+            m.watchdog_pings
+        )],
+    ));
+    out.push((
         "daemon_last_publish_timestamp_seconds".to_string(),
         "Unix time of the last SHM publish".to_string(),
         "gauge",
@@ -396,6 +406,7 @@ mod tests {
             version: "0.5.0",
             uptime_s: 10,
             last_publish_age_ms: 0,
+            watchdog_pings: 0,
             expose_processes: false,
         };
         let text = render_metrics(&m, false);
@@ -441,6 +452,7 @@ mod tests {
             version: "0.5.0",
             uptime_s: 1,
             last_publish_age_ms: 0,
+            watchdog_pings: 0,
             expose_processes: false,
         };
         assert!(render_metrics(&m, true).ends_with("# EOF\n"));
@@ -457,6 +469,7 @@ mod tests {
             version: "9.9",
             uptime_s: 0,
             last_publish_age_ms: 0,
+            watchdog_pings: 0,
             expose_processes: false,
         };
         let text = render_metrics(&m, false);

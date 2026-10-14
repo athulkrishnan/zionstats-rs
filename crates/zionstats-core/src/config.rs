@@ -124,17 +124,35 @@ impl Default for Config {
 /// Load with full garbage tolerance: a malformed file, wrong-typed keys,
 /// unknown keys — all silently fall back to defaults per-key.
 pub fn load(path: &std::path::Path) -> Config {
+    load_verbose(path).0
+}
+
+/// `load` plus the per-key fallback warnings (--check-config surfaces them).
+/// Tolerant behavior is identical; the warnings are purely informational.
+pub fn load_verbose(path: &std::path::Path) -> (Config, Vec<String>) {
+    let mut warnings = Vec::new();
     let mut cfg = Config::default();
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return cfg;
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => {
+            warnings.push("(no config file found; using defaults)".to_string());
+            return (cfg, warnings);
+        }
     };
-    let Ok(data) = text.parse::<toml::Table>() else {
-        return cfg;
+    let data = match text.parse::<toml::Table>() {
+        Ok(d) => d,
+        Err(e) => {
+            warnings.push(format!("config is not valid TOML ({e}); using defaults"));
+            return (cfg, warnings);
+        }
     };
 
     // top-level flat keys shared with the Python app
-    if let Some(v) = data.get("interval").and_then(as_f64) {
-        cfg.tui_interval_s = v.clamp(0.25, 30.0);
+    if let Some(raw) = data.get("interval") {
+        match as_f64(raw) {
+            Some(v) => cfg.tui_interval_s = v.clamp(0.25, 30.0),
+            None => warnings.push("interval: unparseable; using 0.25".into()),
+        }
     }
     if let Some(v) = data.get("readonly").and_then(as_bool) {
         cfg.readonly = v;
@@ -277,7 +295,7 @@ pub fn load(path: &std::path::Path) -> Config {
         }
     }
 
-    cfg
+    (cfg, warnings)
 }
 
 /// `$ZION_CONFIG` -> explicit path -> default location.

@@ -17,6 +17,27 @@ use ratatui::Terminal;
 use zionstats_core::shm::layout::{get_fixed, AlertV1, GpuSampleV1, ProcEntryV1};
 use zionstats_core::shm::{OwnedFrame, ShmReader};
 
+#[derive(Clone, Copy, PartialEq)]
+enum SortMode {
+    MemDesc,
+    PidAsc,
+}
+
+impl SortMode {
+    fn next(self) -> Self {
+        match self {
+            SortMode::MemDesc => SortMode::PidAsc,
+            SortMode::PidAsc => SortMode::MemDesc,
+        }
+    }
+    fn label(self) -> &'static str {
+        match self {
+            SortMode::MemDesc => "mem",
+            SortMode::PidAsc => "pid",
+        }
+    }
+}
+
 pub struct TuiOpts {
     pub interval_s: f64,
     pub readonly: bool,
@@ -24,6 +45,8 @@ pub struct TuiOpts {
     pub exit_after_ms: Option<u64>,
     /// hidden: count draw calls (bench output)
     pub run_once_frame: bool,
+    /// hidden: print attach->first-draw latency in the bench line
+    pub print_first_frame_ms: bool,
 }
 
 pub fn run(opts: TuiOpts) -> i32 {
@@ -49,18 +72,77 @@ pub fn run(opts: TuiOpts) -> i32 {
     let started = Instant::now();
     let mut interval = opts.interval_s.clamp(0.25, 30.0);
     let mut paused = false;
+    let mut sort = SortMode::MemDesc;
+    let mut needs_redraw = true; // state changed (badge, pause, key) -> draw now
     let mut frames = 0u64;
+    let mut first_frame_ms: Option<f64> = None;
     let mut last_frame: Option<OwnedFrame> = None;
+    let mut tick_period = Duration::from_secs_f64(interval);
+    let mut next_tick = Instant::now();
     let exit_code = loop {
-        // read + draw
-        if !paused {
-            if let Ok(frame) = reader.read() {
-                last_frame = Some(frame);
+        // input at up to ~60 Hz, never sleeping past the next redraw
+        let until_tick = next_tick.saturating_duration_since(Instant::now());
+        if crossterm::event::poll(until_tick.min(Duration::from_millis(16))).unwrap_or(false) {
+            if let crossterm::event::Event::Key(k) =
+                crossterm::event::read().unwrap_or(crossterm::event::Event::Key(
+                    crossterm::event::KeyEvent::from(crossterm::event::KeyCode::Null),
+                ))
+            {
+                if k.kind == crossterm::event::KeyEventKind::Press {
+                    use crossterm::event::KeyCode;
+                    match k.code {
+                        KeyCode::Char('q') | KeyCode::Esc => break 0,
+                        KeyCode::Char(' ') | KeyCode::Char('p') => {
+                            paused = !paused;
+                            needs_redraw = true;
+                        }
+                        KeyCode::Char('+') | KeyCode::Char('=') => {
+                            interval = (interval * 1.5).min(30.0);
+                            tick_period = Duration::from_secs_f64(interval);
+                            next_tick = Instant::now();
+                            needs_redraw = true;
+                        }
+                        KeyCode::Char('-') => {
+                            interval = (interval / 1.5).max(0.25);
+                            tick_period = Duration::from_secs_f64(interval);
+                            next_tick = Instant::now();
+                            needs_redraw = true;
+                        }
+                        KeyCode::Char('s') => {
+                            sort = sort.next();
+                            needs_redraw = true;
+                        }
+                        _ => {}
+                    }
+                }
             }
         }
-        if let (Some(term), Some(frame)) = (terminal.as_mut(), last_frame.as_ref()) {
-            let _ = term.draw(|f| ui(f, frame, paused, interval, opts.readonly));
-            frames += 1;
+        if Instant::now() >= next_tick {
+            if !paused {
+                if let Ok(frame) = reader.read() {
+                    last_frame = Some(frame);
+                }
+            }
+            if let (Some(term), Some(frame)) = (terminal.as_mut(), last_frame.as_ref()) {
+                let _ = term.draw(|f| ui(f, frame, paused, interval, sort, opts.readonly));
+                if first_frame_ms.is_none() {
+                    first_frame_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+                }
+                frames += 1;
+            }
+            needs_redraw = false; // the tick draw covers it
+                                  // no catch-up burst: a slow tick resyncs to now
+            next_tick += tick_period;
+            if next_tick.saturating_duration_since(Instant::now()) > tick_period {
+                next_tick = Instant::now();
+            }
+        }
+        if needs_redraw {
+            if let (Some(term), Some(frame)) = (terminal.as_mut(), last_frame.as_ref()) {
+                let _ = term.draw(|f| ui(f, frame, paused, interval, sort, opts.readonly));
+                frames += 1;
+            }
+            needs_redraw = false;
         }
         if let Some(ms) = opts.exit_after_ms {
             if started.elapsed() >= Duration::from_millis(ms) {
@@ -70,14 +152,6 @@ pub fn run(opts: TuiOpts) -> i32 {
         if opts.run_once_frame {
             break 0;
         }
-        // input poll at ~16ms for snappy keys
-        if poll_key(Duration::from_millis(16), &mut interval, &mut paused) {
-            break 0;
-        }
-        let target = Duration::from_secs_f64(interval);
-        let elapsed = started.elapsed();
-        let _ = elapsed; // pacing handled by poll timeout below
-        std::thread::sleep(target.min(Duration::from_millis(250)));
     };
 
     if let Some(mut term) = terminal {
@@ -92,44 +166,20 @@ pub fn run(opts: TuiOpts) -> i32 {
     crossterm::terminal::disable_raw_mode().ok();
     if opts.exit_after_ms.is_some() || opts.run_once_frame {
         // bench mode: machine-readable stats on stdout
+        let ff = if opts.print_first_frame_ms {
+            first_frame_ms
+                .map(|ms| format!(" first_frame_ms={ms:.2}"))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
         println!(
-            "frames={frames} elapsed_ms={:.1} fps={:.1}",
+            "frames={frames} elapsed_ms={:.1} fps={:.1}{ff}",
             started.elapsed().as_secs_f64() * 1000.0,
             frames as f64 / started.elapsed().as_secs_f64().max(0.000001)
         );
     }
     exit_code
-}
-
-/// returns true when the app should quit
-fn poll_key(timeout: Duration, interval: &mut f64, paused: &mut bool) -> bool {
-    let deadline = Instant::now() + timeout;
-    loop {
-        if crossterm::event::poll(Duration::ZERO).unwrap_or(false) {
-            if let crossterm::event::Event::Key(k) = crossterm::event::read().unwrap_or_else(|_| {
-                crossterm::event::Event::Key(crossterm::event::KeyEvent::from(
-                    crossterm::event::KeyCode::Null,
-                ))
-            }) {
-                if k.kind == crossterm::event::KeyEventKind::Press {
-                    use crossterm::event::KeyCode;
-                    match k.code {
-                        KeyCode::Char('q') | KeyCode::Esc => return true,
-                        KeyCode::Char(' ') | KeyCode::Char('p') => *paused = !*paused,
-                        KeyCode::Char('+') | KeyCode::Char('=') => {
-                            *interval = (*interval * 1.5).min(30.0);
-                        }
-                        KeyCode::Char('-') => *interval = (*interval / 1.5).max(0.25),
-                        _ => {}
-                    }
-                }
-            }
-        }
-        if Instant::now() >= deadline {
-            return false;
-        }
-        std::thread::sleep(Duration::from_millis(4));
-    }
 }
 
 /// Test hook: render one frame into an arbitrary backend (TestBackend).
@@ -140,10 +190,17 @@ pub fn render_for_test(
     interval: f64,
     readonly: bool,
 ) {
-    ui(f, frame, paused, interval, readonly)
+    ui(f, frame, paused, interval, SortMode::MemDesc, readonly)
 }
 
-fn ui(f: &mut Frame, frame: &OwnedFrame, paused: bool, interval: f64, readonly: bool) {
+fn ui(
+    f: &mut Frame,
+    frame: &OwnedFrame,
+    paused: bool,
+    interval: f64,
+    sort: SortMode,
+    readonly: bool,
+) {
     let alive = frame.daemon_alive();
     let [header, mut body, footer] = Layout::vertical([
         Constraint::Length(2),
@@ -210,12 +267,21 @@ fn ui(f: &mut Frame, frame: &OwnedFrame, paused: bool, interval: f64, readonly: 
     } else {
         let alerts: Vec<&AlertV1> = frame.alerts.iter().rev().take(2).collect();
         let rows = if alerts.is_empty() { 0 } else { alerts.len() };
-        let [cards, procs, alert_rows] = Layout::vertical([
+        let control_row = if frame.control.mode != 0 || frame.control.state_on != 0 {
+            1
+        } else {
+            0
+        };
+        let [cards, control_area, procs, alert_rows] = Layout::vertical([
             Constraint::Length((n as u16).clamp(1, 8) * 4),
+            Constraint::Length(control_row),
             Constraint::Min(6),
             Constraint::Length(rows as u16),
         ])
         .areas(body);
+        if control_row == 1 {
+            render_control_row(f, control_area, &frame.control);
+        }
         let card_chunks = Layout::vertical(
             (0..n as u16)
                 .map(|_| Constraint::Length(4))
@@ -225,7 +291,7 @@ fn ui(f: &mut Frame, frame: &OwnedFrame, paused: bool, interval: f64, readonly: 
         for (i, g) in frame.gpus.iter().enumerate() {
             render_gpu_card(f, card_chunks[i], g, frame.rings.get(i));
         }
-        render_procs(f, procs, &frame.procs);
+        render_procs(f, procs, &frame.procs, sort);
         if !alerts.is_empty() {
             let lines: Vec<Line> = alerts
                 .iter()
@@ -251,6 +317,8 @@ fn ui(f: &mut Frame, frame: &OwnedFrame, paused: bool, interval: f64, readonly: 
             Span::raw(" pause  "),
             Span::styled("+/-", Style::default().fg(Color::Cyan)),
             Span::raw(" rate  "),
+            Span::styled("s", Style::default().fg(Color::Cyan)),
+            Span::raw(format!(" sort:{}  ", sort.label())),
             Span::raw(format!(
                 "tick {} · gpus {} · procs {}",
                 frame.header.tick_id,
@@ -368,7 +436,54 @@ fn render_gpu_card(
 
 const RING_SHOW: usize = 96;
 
-fn render_procs(f: &mut Frame, area: ratatui::layout::Rect, procs: &[ProcEntryV1]) {
+fn render_control_row(
+    f: &mut Frame,
+    area: ratatui::layout::Rect,
+    c: &zionstats_core::shm::layout::ControlStateV1,
+) {
+    let mode = match c.mode {
+        0 => "off",
+        1 => "dry_run",
+        2 => "auto",
+        3 => "manual",
+        _ => "off",
+    };
+    let trigger = if c.trigger == 1 { "usage" } else { "temp" };
+    let state = if c.state_on != 0 { "ON" } else { "off" };
+    let plug = match c.plug_ok {
+        1 => "plug ok",
+        0 => "plug FAIL",
+        _ => "plug n/a",
+    };
+    let pwm = if c.pwm_engaged != 0 {
+        format!("pwm {:.0}%", c.pwm_current)
+    } else {
+        "pwm driver".to_string()
+    };
+    let style = if c.state_on != 0 {
+        Style::default().fg(Color::Green)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+    f.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            format!(
+                "cooling {mode} ({trigger}) · {state} · {pwm} · {plug} · duty {:.0}s · \"{}\"",
+                c.duty_seconds,
+                get_fixed(&c.reason)
+            ),
+            style,
+        ))),
+        area,
+    );
+}
+
+fn render_procs(f: &mut Frame, area: ratatui::layout::Rect, procs: &[ProcEntryV1], sort: SortMode) {
+    let mut sorted: Vec<&ProcEntryV1> = procs.iter().collect();
+    match sort {
+        SortMode::MemDesc => sorted.sort_by_key(|p| std::cmp::Reverse(p.mem_used)),
+        SortMode::PidAsc => sorted.sort_by_key(|p| p.pid),
+    }
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(symbols::border::ROUNDED)
@@ -388,7 +503,7 @@ fn render_procs(f: &mut Frame, area: ratatui::layout::Rect, procs: &[ProcEntryV1
         ),
         Style::default().fg(Color::DarkGray),
     )));
-    for p in procs.iter().take(inner.height as usize).skip(1) {
+    for p in sorted.into_iter().take(inner.height as usize).skip(1) {
         lines.push(Line::from(format!(
             "{:<8} {:<4} {:<10} {:>7.1}G  {}",
             p.pid,

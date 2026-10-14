@@ -18,6 +18,7 @@ use zionstats_core::shm::layout::ProcEntryV1;
 
 /// Snapshot of the last tick, shared by the poll loop with the HTTP task.
 pub struct LiveFrame {
+    pub watchdog_pings: u64,
     pub gpus: Vec<zionstats_core::shm::layout::GpuSampleV1>,
     pub procs: Vec<ProcEntryV1>,
     pub control: Option<zionstats_core::shm::layout::ControlStateV1>,
@@ -80,6 +81,7 @@ fn route(
             let lf = frame.lock().unwrap();
             let input = MetricsInput {
                 gpus: &lf.gpus,
+                watchdog_pings: lf.watchdog_pings,
                 procs: &lf.procs,
                 control: lf.control.as_ref(),
                 hostname: &lf.hostname,

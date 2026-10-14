@@ -206,6 +206,7 @@ async fn run_async(opts: DaemonOpts) -> i32 {
     // ---- metrics endpoint (P5)
     let live: Arc<crate::http::SharedFrame> =
         Arc::new(std::sync::Mutex::new(crate::http::LiveFrame {
+            watchdog_pings: 0,
             gpus: Vec::new(),
             procs: Vec::new(),
             control: None,
@@ -477,6 +478,7 @@ async fn run_async(opts: DaemonOpts) -> i32 {
             lf.gpus = data_gpus.clone();
             lf.procs = last_procs_shm.clone();
             lf.control = control.state_for_shm();
+            lf.watchdog_pings = state.watchdog_pings.load(Ordering::Relaxed);
         }
 
         state.tick_id.fetch_add(1, Ordering::Relaxed);

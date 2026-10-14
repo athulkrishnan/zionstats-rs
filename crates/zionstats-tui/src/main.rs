@@ -19,6 +19,9 @@ struct Cli {
     exit_after_ms: Option<u64>,
     #[arg(long, hide = true)]
     run_once_frame: bool,
+    /// hidden: report attach->first-draw latency in the bench line
+    #[arg(long, hide = true)]
+    print_first_frame_ms: bool,
 }
 
 fn main() {
@@ -28,6 +31,7 @@ fn main() {
         readonly: cli.readonly,
         exit_after_ms: cli.exit_after_ms,
         run_once_frame: cli.run_once_frame,
+        print_first_frame_ms: cli.print_first_frame_ms,
     });
     std::process::exit(code);
 }
