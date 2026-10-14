@@ -39,7 +39,8 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER: aarch64-linux-gnu-gcc
         run: cargo build --release --target ${{ matrix.target }} --workspace
-      - name: Smoke
+      - name: Smoke (x86_64 only -- an aarch64 binary cannot exec on this runner)
+        if: matrix.target == 'x86_64-unknown-linux-musl'
         run: |
           ./target/${{ matrix.target }}/release/zionstatsd --version
           ./target/${{ matrix.target }}/release/zionstats-tui --version
