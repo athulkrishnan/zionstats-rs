@@ -1,0 +1,35 @@
+[package]
+name = "zionstats-daemon"
+description = "zionstatsd: headless NVML polling, fan control, Prometheus endpoint, shared-memory publisher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "zionstatsd"
+path = "src/main.rs"
+
+[dependencies]
+zionstats-core.workspace = true
+tokio.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+http-body-util.workspace = true
+clap.workspace = true
+sd-notify.workspace = true
+nvml-wrapper = { workspace = true, optional = true }
+libc.workspace = true
+thiserror.workspace = true
+log.workspace = true
+env_logger.workspace = true
+serde_json.workspace = true
+
+[features]
+default = ["nvml"]
+nvml = ["zionstats-core/nvml", "dep:nvml-wrapper"]

@@ -1,0 +1,29 @@
+[package]
+name = "zionstats-core"
+description = "Shared types, SHM layout, hysteresis controller, sources, metrics for zionstats"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+zerocopy.workspace = true
+memmap2.workspace = true
+nvml-wrapper = { workspace = true, optional = true }
+thiserror.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
+regex.workspace = true
+ureq.workspace = true
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[features]
+default = ["nvml"]
+nvml = ["dep:nvml-wrapper"]

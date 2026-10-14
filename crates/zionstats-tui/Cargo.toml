@@ -1,0 +1,30 @@
+[package]
+name = "zionstats-tui"
+description = "zionstats-tui: ephemeral shared-memory terminal UI (never touches NVML)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "zionstats-tui"
+path = "src/main.rs"
+
+[dependencies]
+zionstats-core.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+clap.workspace = true
+libc.workspace = true
+thiserror.workspace = true
+log.workspace = true
+env_logger.workspace = true
+
+[features]
+default = ["nvml"]
+nvml = ["zionstats-core/nvml"]

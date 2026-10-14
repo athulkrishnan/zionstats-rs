@@ -1,0 +1,36 @@
+[Unit]
+Description=zionstats GPU monitoring daemon (NVML -> shared memory + Prometheus)
+Documentation=https://github.com/athulkrishnan/zionstats#rust-daemon
+After=multi-user.target
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/zionstatsd --config /etc/zionstats/config.toml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5s
+WatchdogSec=15s
+# Fan PWM via NVML has no fine-grained capability; run as root for fan
+# control. A non-root User= degrades to driver-default fans (the daemon
+# probes writability and alerts -- see README "Fan control (v0.5)").
+User=root
+Group=root
+# Hardening: fan/plug control needs /dev/nvidia* rw, LAN egress, /dev/shm rw
+ProtectSystem=strict
+ReadWritePaths=/dev/shm
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+# NOTE: CapabilityBoundingSet deliberately unset in v0.5 -- some NVML paths
+# (persistenced IPC) behave differently under an empty set; tightening is a
+# documented follow-up with a test matrix.
+
+[Install]
+WantedBy=multi-user.target

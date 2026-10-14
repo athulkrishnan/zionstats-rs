@@ -1,0 +1,283 @@
+//! Live NVML source. Full coverage via the individual getters (the sys
+//! crate does not bind the batched FieldValues API; at 250 ms intervals
+//! ~30 microsecond-class calls per GPU are negligible). Contract: a sample
+//! never fails wholesale — every field is best-effort `Option` (Python
+//! `_g()` parity), so the TUI never dies mid-session.
+
+use std::time::SystemTime;
+
+use nvml_wrapper::enum_wrappers::device::PerformanceState;
+use nvml_wrapper::enum_wrappers::device::{
+    Clock, PcieUtilCounter, TemperatureSensor, TemperatureThreshold,
+};
+use nvml_wrapper::enums::device::UsedGpuMemory;
+use nvml_wrapper::Nvml;
+
+use super::{Source, SourceError};
+use crate::types::{decode_throttle, DeviceInfo, Environment, GpuProc, ProcKind, Sample};
+
+pub struct NvmlSource {
+    nvml: &'static Nvml,
+    indices: Vec<u32>,
+    /// last /proc cpu totals per pid for the CPU% delta
+    last_cpu: std::sync::Mutex<std::collections::HashMap<u32, (u64, SystemTime)>>,
+}
+
+// SAFETY: the daemon drives NvmlSource from a single poll task.
+unsafe impl Send for NvmlSource {}
+
+impl NvmlSource {
+    pub fn try_new(only: Option<&[u32]>) -> Result<NvmlSource, SourceError> {
+        let nvml: &'static Nvml = Box::leak(Box::new(
+            Nvml::init().map_err(|e| SourceError::Nvml(e.to_string()))?,
+        ));
+        let count = nvml
+            .device_count()
+            .map_err(|e| SourceError::Nvml(e.to_string()))?;
+        let mut indices = Vec::new();
+        for i in 0..count {
+            if let Some(only) = only {
+                if !only.contains(&i) {
+                    continue;
+                }
+            }
+            indices.push(i);
+        }
+        if indices.is_empty() {
+            return Err(SourceError::NoDevices);
+        }
+        Ok(NvmlSource {
+            nvml,
+            indices,
+            last_cpu: std::sync::Mutex::new(std::collections::HashMap::new()),
+        })
+    }
+}
+
+fn hostname_of() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/hostname")
+        .map(|h| h.trim().to_string())
+        .unwrap_or_default()
+}
+
+fn kernel_of() -> String {
+    std::fs::read_to_string("/proc/sys/kernel/osrelease")
+        .map(|k| format!("Linux {}", k.trim()))
+        .unwrap_or_default()
+}
+
+impl Source for NvmlSource {
+    fn environment(&mut self) -> Environment {
+        let driver = self.nvml.sys_driver_version().unwrap_or_default();
+        let nvml_ver = self.nvml.sys_nvml_version().unwrap_or_default();
+        let cuda_max = self
+            .nvml
+            .sys_cuda_driver_version()
+            .map(|v| format!("{}.{}", v / 1000, (v % 1000) / 10))
+            .unwrap_or_default();
+        Environment {
+            hostname: hostname_of(),
+            kernel: kernel_of(),
+            driver,
+            nvml: nvml_ver,
+            cuda_max,
+            provider: "nvml",
+        }
+    }
+
+    fn devices(&mut self) -> Result<Vec<DeviceInfo>, SourceError> {
+        Ok(self
+            .indices
+            .iter()
+            .map(|i| match self.nvml.device_by_index(*i) {
+                Ok(d) => DeviceInfo {
+                    index: *i,
+                    name: d.name().unwrap_or_else(|_| "?".into()),
+                    uuid: d.uuid().unwrap_or_default(),
+                },
+                Err(_) => DeviceInfo {
+                    index: *i,
+                    name: "?".into(),
+                    uuid: String::new(),
+                },
+            })
+            .collect())
+    }
+
+    fn sample(&mut self) -> Vec<Sample> {
+        let now = SystemTime::now();
+        self.indices
+            .iter()
+            .map(|i| {
+                let mut s = Sample {
+                    ts: now,
+                    index: *i,
+                    ..Default::default()
+                };
+                if let Ok(dev) = self.nvml.device_by_index(*i) {
+                    if let Ok(name) = dev.name() {
+                        s.name = name;
+                    }
+                    if let Ok(uuid) = dev.uuid() {
+                        s.uuid = uuid;
+                    }
+                    if let Ok(u) = dev.utilization_rates() {
+                        s.util_gpu = Some(u.gpu as f32);
+                        s.util_mem = Some(u.memory as f32);
+                    }
+                    if let Ok(e) = dev.encoder_utilization() {
+                        s.util_enc = Some(e.utilization as f32);
+                    }
+                    if let Ok(dec) = dev.decoder_utilization() {
+                        s.util_dec = Some(dec.utilization as f32);
+                    }
+                    if let Ok(m) = dev.memory_info() {
+                        s.mem_used = m.used;
+                        s.mem_total = m.total;
+                    }
+                    s.power_w = dev.power_usage().ok().map(|mw| mw as f32 / 1000.0);
+                    s.power_limit_w = dev
+                        .enforced_power_limit()
+                        .or_else(|_| dev.power_management_limit())
+                        .ok()
+                        .map(|mw| mw as f32 / 1000.0);
+                    s.clocks_sm_mhz = dev.clock_info(Clock::SM).ok();
+                    s.clocks_mem_mhz = dev.clock_info(Clock::Memory).ok();
+                    s.clocks_max_sm_mhz = dev.max_clock_info(Clock::SM).ok();
+                    s.energy_mj = dev.total_energy_consumption().ok();
+                    if let Ok(bits) = dev.current_throttle_reasons() {
+                        s.throttle_bits = bits.bits() as u32;
+                        s.throttle = decode_throttle(bits.bits() as u32)
+                            .into_iter()
+                            .map(String::from)
+                            .collect();
+                    }
+                    s.temp_gpu = dev
+                        .temperature(TemperatureSensor::Gpu)
+                        .ok()
+                        .map(|t| t as f32);
+                    s.temp_slowdown = dev
+                        .temperature_threshold(TemperatureThreshold::Slowdown)
+                        .ok()
+                        .map(|t| t as f32);
+                    s.temp_shutdown = dev
+                        .temperature_threshold(TemperatureThreshold::Shutdown)
+                        .ok()
+                        .map(|t| t as f32);
+                    if let Ok(n) = dev.num_fans() {
+                        if n > 0 {
+                            s.fan_pct = dev.fan_speed(0).ok().map(|f| f as f32);
+                        }
+                    }
+                    s.pcie_gen_cur = dev.current_pcie_link_gen().ok().map(|g| g as u8);
+                    s.pcie_gen_max = dev.max_pcie_link_gen().ok().map(|g| g as u8);
+                    s.pcie_width_cur = dev.current_pcie_link_width().ok().map(|w| w as u8);
+                    s.pcie_width_max = dev.max_pcie_link_width().ok().map(|w| w as u8);
+                    s.pcie_rx_kbps = dev.pcie_throughput(PcieUtilCounter::Receive).ok();
+                    s.pcie_tx_kbps = dev.pcie_throughput(PcieUtilCounter::Send).ok();
+                    if let Ok(p) = dev.performance_state() {
+                        if p != PerformanceState::Unknown {
+                            s.pstate = Some(p as i8);
+                        }
+                    }
+                }
+                s
+            })
+            .collect()
+    }
+
+    fn processes(&mut self) -> Vec<GpuProc> {
+        let now = SystemTime::now();
+        let mut out: Vec<GpuProc> = Vec::new();
+        for i in &self.indices {
+            let Ok(dev) = self.nvml.device_by_index(*i) else {
+                continue;
+            };
+            let mut per_kind: Vec<GpuProc> = Vec::new();
+            let compute = dev.running_compute_processes();
+            for (kind, infos) in [
+                (ProcKind::Compute, compute),
+                (ProcKind::Graphics, dev.running_graphics_processes()),
+            ] {
+                if let Ok(list) = infos {
+                    for p in list {
+                        per_kind.push(GpuProc {
+                            pid: p.pid,
+                            gpu_index: *i,
+                            kind,
+                            mem_used: match p.used_gpu_memory {
+                                UsedGpuMemory::Used(v) => v,
+                                UsedGpuMemory::Unavailable => 0,
+                            },
+                            sm_pct: None, // pmon FFI lands in a follow-up
+                            mem_pct: None,
+                            enc_pct: None,
+                            dec_pct: None,
+                            cpu_pct: None,
+                            uid: 0,
+                            user: "?".into(),
+                            command: String::new(),
+                            start_time: 0,
+                        });
+                    }
+                }
+            }
+            // merge C+G (Python parity)
+            for p in per_kind {
+                match out.iter_mut().find(|o| o.pid == p.pid) {
+                    Some(existing) => {
+                        existing.kind = ProcKind::ComputeAndGraphics;
+                        existing.mem_used = existing.mem_used.max(p.mem_used);
+                    }
+                    None => out.push(p),
+                }
+            }
+        }
+        enrich_from_proc(&mut out, now, &self.last_cpu);
+        out
+    }
+}
+
+/// /proc enrichment: uid, user, cmdline, cpu% delta, starttime.
+fn enrich_from_proc(
+    procs: &mut [GpuProc],
+    now: SystemTime,
+    last_cpu: &std::sync::Mutex<std::collections::HashMap<u32, (u64, SystemTime)>>,
+) {
+    let clk_tck: f64 = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
+    for p in procs.iter_mut() {
+        let base = std::path::Path::new("/proc").join(p.pid.to_string());
+        if let Ok(stat) = std::fs::read(base.join("stat")) {
+            if let Some(st) = crate::procfs::parse_stat(&stat) {
+                p.start_time = st.starttime;
+                let total = st.utime + st.stime;
+                let mut map = last_cpu.lock().unwrap();
+                if let Some((prev_total, prev_t)) = map.get(&p.pid) {
+                    let dt = now
+                        .duration_since(*prev_t)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(0.0);
+                    if dt > 0.0 && clk_tck > 0.0 {
+                        let delta = total.saturating_sub(*prev_total) as f64;
+                        p.cpu_pct = Some((delta / clk_tck / dt * 100.0) as f32);
+                    }
+                }
+                map.insert(p.pid, (total, now));
+            }
+        }
+        if let Ok(cmd) = std::fs::read(base.join("cmdline")) {
+            p.command = crate::procfs::parse_cmdline(&cmd);
+        }
+        if let Ok(md) = std::fs::metadata(&base) {
+            use std::os::unix::fs::MetadataExt;
+            p.uid = md.uid();
+            p.user = uid_to_name(md.uid());
+        }
+    }
+}
+
+fn uid_to_name(uid: u32) -> String {
+    // numeric name keeps the hot path free of passwd lookups; documented
+    // delta vs Python's pwd-based user column
+    uid.to_string()
+}
