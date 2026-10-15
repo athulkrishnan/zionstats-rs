@@ -30,6 +30,13 @@ cargo build --release
 ./target/release/zionstats --demo
 ```
 
+![zionstats-rs TUI monitoring an Ollama llama-server workload](assets/zionstats-ollama.gif)
+
+Built for the local-LLM rig: the process table resolves `llama-server` /
+`vllm` to real VRAM + SM% utilization, the daemon exports Prometheus
+metrics for your fleet, and thermal automation keeps inference cool.
+See [docs/MONITORING-OLLAMA.md](docs/MONITORING-OLLAMA.md).
+
 `--demo` spawns an embedded synthetic two-GPU daemon, waits for its first
 frame, attaches the TUI, and tears everything down when you quit -- no GPU
 required. (Screenshot/asciinema placeholder: `zionstats --demo` under
