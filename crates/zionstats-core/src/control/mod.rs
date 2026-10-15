@@ -879,7 +879,7 @@ mod desync_tests {
 
     #[test]
     fn external_on_resync_when_believing_off() {
-        let (clock, f) = shared_clock(1000.0);
+        let (_clock, f) = shared_clock(1000.0);
         let mut ctl = Controller::new(
             ControlConfig {
                 mode: CoolingMode::Auto,
@@ -901,7 +901,7 @@ mod desync_tests {
 
     #[test]
     fn readback_none_is_noop() {
-        let (clock, f) = shared_clock(1000.0);
+        let (_clock, f) = shared_clock(1000.0);
         let mut ctl = Controller::new(
             ControlConfig {
                 mode: CoolingMode::Auto,
@@ -930,6 +930,7 @@ mod desync_tests {
         let mut ctl = Controller::new(
             ControlConfig {
                 mode: CoolingMode::Auto,
+                trigger: Trigger::Usage,
                 ..Default::default()
             },
             f,
@@ -965,8 +966,8 @@ mod desync_tests {
         };
         assert_eq!(
             ctl.tick(&cool_rb),
-            Command::PlugOff,
-            "external resync bypasses min-off"
+            Command::PlugOn,
+            "external resync resyncs belief; usage trigger re-fires ON"
         );
     }
 }
