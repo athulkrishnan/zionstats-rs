@@ -248,6 +248,7 @@ mod tests {
             util_pct: Some(40.0),
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
+            readback: None,
         };
         let st = stack.tick(&load, &shutdown).unwrap();
         assert!(st.on, "usage load must turn the plug ON");
@@ -260,6 +261,7 @@ mod tests {
             util_pct: Some(0.0),
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
+            readback: None,
         };
         let st = stack.tick(&idle, &shutdown).unwrap();
         assert!(st.on, "idle window still running");
@@ -288,6 +290,7 @@ mod tests {
             util_pct: Some(40.0),
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
+            readback: None,
         };
         stack.tick(&load, &AtomicBool::new(false)).unwrap();
         let shutdown = AtomicBool::new(true);

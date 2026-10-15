@@ -346,6 +346,7 @@ async fn run_async(opts: DaemonOpts) -> i32 {
                             .unwrap_or(0)) as f64
                         / 1000.0,
                 ),
+                readback: None,
                 ambient_c: Some(cfg.daemon.ambient_temp_c),
             });
             if let Some(inputs) = hot_inputs {
