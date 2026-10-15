@@ -112,6 +112,9 @@ pub struct ControlState {
     pub util_pct: Option<f32>,
     pub pwm_engaged: bool,
     pub pwm_current: Option<u32>,
+    /// set on external-readback mismatch; bypasses min-on/off for the
+    /// immediate re-fire
+    pub external_resync: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -159,6 +162,12 @@ pub struct TickInputs {
     pub sample_age_s: Option<f64>,
     /// ambient override (config ambient in v0.5; weather is future work)
     pub ambient_c: Option<f32>,
+    /// periodic external plug readback (None = not this tick).  When the
+    /// readback disagrees with the controller's belief, the belief is
+    /// resynced and `external_resync` bypasses min-on/off on the
+    /// immediate re-fire (the relay was changed externally, so our
+    /// anti-chatter windows do not apply to it).
+    pub readback: Option<bool>,
 }
 
 pub type Clock = Box<dyn Fn() -> f64 + Send>;
@@ -194,6 +203,7 @@ impl Controller {
             cfg,
             state: ControlState {
                 mode,
+                external_resync: false,
                 ..Default::default()
             },
             events: VecDeque::with_capacity(100),
@@ -368,6 +378,19 @@ impl Controller {
             want = self.desired.unwrap_or(self.state.on);
         }
 
+        // external-readback reconciliation: the plug relay was toggled
+        // outside this process (vendor app, voice assistant) -- resync
+        // the belief; the re-fire (if the mode's intent still differs)
+        // bypasses min-on/off via the external_resync flag
+        if let Some(rb) = hot.readback {
+            if rb != self.state.on {
+                self.state.on = rb;
+                self.state.last_change_ts = now;
+                self.state.on_since = if rb { Some(now) } else { None };
+                self.state.external_resync = true;
+            }
+        }
+
         // duty cap (always enforced when actually on — Python order quirk:
         // this runs before the dry_run return, and clears `on` even in
         // dry_run / even when mode != auto does not actuate)
@@ -444,8 +467,16 @@ impl Controller {
             return Command::Hold;
         }
 
-        // timing constraints (auto)
+        // timing constraints (auto); external resync bypasses min-on/off
         if want != self.state.on {
+            if self.state.external_resync {
+                self.state.external_resync = false;
+                return if want {
+                    Command::PlugOn
+                } else {
+                    Command::PlugOff
+                };
+            }
             let since = self.state.last_change_ts;
             if self.state.on && now - since < self.cfg.min_on_s as f64 {
                 self.state.reason = format!("{} [min-on hold]", why);
@@ -591,6 +622,7 @@ mod tests {
             temp_c: Some(t),
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
+            readback: None,
             ..Default::default()
         }
     }
@@ -628,6 +660,7 @@ mod tests {
             temp_c: Some(84.0),
             sample_age_s: Some(0.0),
             ambient_c: Some(80.0),
+            readback: None,
             ..Default::default()
         };
         assert_eq!(e.ctl.tick(&muggy), Command::Hold);
@@ -647,6 +680,7 @@ mod tests {
                 temp_c: Some(85.0),
                 sample_age_s: Some(16.0),
                 ambient_c: Some(30.0),
+            readback: None,
                 ..Default::default()
             };
             assert_eq!(e.ctl.tick(&stale), Command::PlugOff);
@@ -711,6 +745,7 @@ mod tests {
             util_pct: Some(40.0),
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
+            readback: None,
         };
         assert_eq!(e.ctl.tick(&load), Command::PlugOn);
         e.ctl.commit(true, true, "test");
@@ -719,6 +754,7 @@ mod tests {
             util_pct: Some(0.0),
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
+            readback: None,
         };
         assert_eq!(e.ctl.tick(&idle_hot), Command::Hold);
         assert!(e.ctl.state.reason.contains("hot"));
@@ -727,6 +763,7 @@ mod tests {
             util_pct: Some(0.0),
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
+            readback: None,
         };
         assert_eq!(e.ctl.tick(&idle_cool), Command::Hold, "within idle_off_s");
         advance(&e, 601.0);
@@ -742,6 +779,7 @@ mod tests {
             util_pct: Some(40.0),
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
+            readback: None,
         };
         assert_eq!(e.ctl.tick(&load), Command::PlugOn);
         e.ctl.commit(true, true, "test");
@@ -750,6 +788,7 @@ mod tests {
             util_pct: None,
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
+            readback: None,
         };
         assert_eq!(e.ctl.tick(&unknown), Command::Hold);
         assert!(e.ctl.state.idle_since.is_none());
@@ -790,5 +829,101 @@ mod tests {
         assert_eq!(fails.len(), 1, "fail alerts once until recovery");
         e.ctl.commit(true, true, "test"); // recovered
         assert_eq!(e.ctl.state.plug_ok, Some(true));
+    }
+}
+
+#[cfg(test)]
+mod desync_tests {
+    use super::*;
+
+    #[test]
+    fn external_off_resync_and_refire() {
+        let (clock, f) = shared_clock(1000.0);
+        let mut ctl = Controller::new(
+            ControlConfig { mode: CoolingMode::Auto, trigger: Trigger::Usage, ..Default::default() },
+            f,
+        );
+        let load = TickInputs {
+            temp_c: Some(50.0), util_pct: Some(40.0),
+            sample_age_s: Some(0.0), ambient_c: Some(30.0), readback: None,
+        };
+        assert_eq!(ctl.tick(&load), Command::PlugOn);
+        ctl.commit(true, true, "test");
+        assert!(ctl.state.on);
+
+        // user flips the plug off in the Tuya app; readback sees it
+        let ext_off = TickInputs {
+            temp_c: Some(50.0), util_pct: Some(40.0),
+            sample_age_s: Some(0.0), ambient_c: Some(30.0), readback: Some(false),
+        };
+        let cmd = ctl.tick(&ext_off);
+        assert!(!ctl.state.on, "belief must resync to physical OFF");
+        assert_eq!(cmd, Command::PlugOn, "re-fire bypasses min-off on resync");
+
+        // next tick: want=True again -> the plug re-engages normally
+        assert_eq!(ctl.tick(&load), Command::PlugOn);
+    }
+
+    #[test]
+    fn external_on_resync_when_believing_off() {
+        let (clock, f) = shared_clock(1000.0);
+        let mut ctl = Controller::new(
+            ControlConfig { mode: CoolingMode::Auto, trigger: Trigger::Usage, ..Default::default() },
+            f,
+        );
+        let ext_on = TickInputs {
+            temp_c: Some(50.0), util_pct: Some(40.0),
+            sample_age_s: Some(0.0), ambient_c: Some(30.0), readback: Some(true),
+        };
+        ctl.tick(&ext_on);
+        assert!(ctl.state.on, "belief must resync to physical ON");
+    }
+
+    #[test]
+    fn readback_none_is_noop() {
+        let (clock, f) = shared_clock(1000.0);
+        let mut ctl = Controller::new(
+            ControlConfig { mode: CoolingMode::Auto, trigger: Trigger::Usage, ..Default::default() },
+            f,
+        );
+        let no_rb = TickInputs {
+            temp_c: Some(50.0), util_pct: Some(40.0),
+            sample_age_s: Some(0.0), ambient_c: Some(30.0), readback: None,
+        };
+        assert_eq!(ctl.tick(&no_rb), Command::PlugOn);
+        ctl.commit(true, true, "test");
+        let base = ctl.state.on;
+        ctl.tick(&no_rb);
+        assert_eq!(ctl.state.on, base, "None readback must not touch belief");
+    }
+
+    #[test]
+    fn external_resync_bypasses_min_off_hold() {
+        let (clock, f) = shared_clock(1000.0);
+        let mut ctl = Controller::new(
+            ControlConfig { mode: CoolingMode::Auto, ..Default::default() },
+            f,
+        );
+        let load = TickInputs {
+            temp_c: Some(50.0), util_pct: Some(40.0),
+            sample_age_s: Some(0.0), ambient_c: Some(30.0), readback: None,
+        };
+        assert_eq!(ctl.tick(&load), Command::PlugOn);
+        ctl.commit(true, true, "test");
+
+        // without resync: load drops -> OFF wanted but min-on holds
+        *clock.lock().unwrap() += 10.0;
+        let cool = TickInputs {
+            temp_c: Some(50.0), util_pct: Some(0.0),
+            sample_age_s: Some(0.0), ambient_c: Some(30.0), readback: None,
+        };
+        assert_eq!(ctl.tick(&cool), Command::Hold, "min-on hold");
+
+        // with resync: bypass fires (relay was changed externally)
+        let cool_rb = TickInputs {
+            temp_c: Some(50.0), util_pct: Some(0.0),
+            sample_age_s: Some(0.0), ambient_c: Some(30.0), readback: Some(false),
+        };
+        assert_eq!(ctl.tick(&cool_rb), Command::PlugOff, "external resync bypasses min-off");
     }
 }
