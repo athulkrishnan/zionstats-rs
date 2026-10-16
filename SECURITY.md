@@ -11,9 +11,15 @@ surface is deliberately small:
   usernames, and command lines of GPU processes unless
   `[export] expose_processes = false`. On shared/multi-user hosts, keep
   the loopback bind and consider disabling process exposure.
+  Optionally set `[export] token` (config only, never CLI) to require
+  a Bearer token on /metrics and /snapshot.
 - **LAN plug control** (optional, off by default): Shelly and Tasmota
   plugs are driven over plain HTTP on your LAN (no TLS, same as the
   sibling Python project). Nothing is sent to any cloud.
+  Note: a LAN man-in-the-middle can spoof plug verification readbacks
+  seen by the control loop. On any actuator error or failed readback
+  the daemon fails safe to driver-default fan control; do not treat
+  plug state as a safety mechanism.
 - **Fan PWM** (optional, off by default, root): hands GPU fans to manual
   control. The daemon restores driver control at startup, on SIGTERM,
   and after a watchdog restart, and falls back to driver default on any
