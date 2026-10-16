@@ -119,6 +119,7 @@ Same file as the Python project: `~/.config/zionstats/config.toml`
 | `[cooling] *` | see [zionstats config](https://github.com/athulkrishnan/zionstats#readme) | same schema as Python |
 | `[[cooling.plugs]] backend` | -- | `shelly` (gen 1/2), `tasmota`; `tuya`/`kasa`/`ha` stay on the Python daemon |
 | `[export] expose_processes` | true | PIDs/users/cmdlines in `/metrics` (see SECURITY.md) |
+| `[export] token` | (empty) | require `Authorization: Bearer <token>` on `/metrics` + `/snapshot` (config only, never CLI) |
 
 ## Metrics
 
