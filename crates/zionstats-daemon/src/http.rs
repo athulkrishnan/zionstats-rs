@@ -34,12 +34,18 @@ pub async fn serve(
     frame: Arc<SharedFrame>,
     version: &'static str,
     expose_processes: bool,
+    token: &str,
 ) -> Result<(), String> {
     let addr = format!("{host}:{port}");
     let listener = TcpListener::bind(&addr)
         .await
         .map_err(|e| format!("metrics bind {addr}: {e}"))?;
-    log::info!("metrics: http://{addr}/metrics");
+    if token.is_empty() {
+        log::info!("metrics: http://{addr}/metrics");
+    } else {
+        log::info!("metrics: http://{addr}/metrics (Bearer token required)");
+    }
+    let token = Arc::new(token.to_string());
     loop {
         let (stream, _) = listener
             .accept()
@@ -47,12 +53,14 @@ pub async fn serve(
             .map_err(|e| format!("accept: {e}"))?;
         let io = hyper_util::rt::TokioIo::new(stream);
         let frame = frame.clone();
+        let token = token.clone();
         tokio::task::spawn(async move {
             let service = service_fn(move |req: Request<hyper::body::Incoming>| {
                 let frame = frame.clone();
+                let token = token.clone();
                 async move {
                     let expose = expose_processes;
-                    Ok::<_, std::convert::Infallible>(route(req, &frame, version, expose))
+                    Ok::<_, std::convert::Infallible>(route(req, &frame, version, expose, &token))
                 }
             });
             let _ = hyper::server::conn::http1::Builder::new()
@@ -63,11 +71,12 @@ pub async fn serve(
     }
 }
 
-fn route(
-    req: Request<hyper::body::Incoming>,
+fn route<B>(
+    req: Request<B>,
     frame: &Arc<SharedFrame>,
     version: &str,
     expose_processes: bool,
+    token: &str,
 ) -> Response<Full<Bytes>> {
     let path = req.uri().path();
     let openmetrics = req
@@ -76,8 +85,17 @@ fn route(
         .and_then(|v| v.to_str().ok())
         .map(|v| v.contains("openmetrics"))
         .unwrap_or(false);
+    let authorized = token.is_empty()
+        || req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v == format!("Bearer {token}"));
     match path {
         "/metrics" => {
+            if !authorized {
+                return empty(401);
+            }
             let lf = frame.lock().unwrap();
             let input = MetricsInput {
                 gpus: &lf.gpus,
@@ -106,6 +124,9 @@ fn route(
                 .unwrap_or_else(|_| empty(500))
         }
         "/snapshot" => {
+            if !authorized {
+                return empty(401);
+            }
             let lf = frame.lock().unwrap();
             let snap = serde_json::json!({
                 "hostname": lf.hostname,
@@ -178,3 +199,96 @@ fn proc_json(p: &ProcEntryV1) -> serde_json::Value {
 
 /// Interval helper re-export to keep the dep graph obvious
 pub type KeepAlive = Duration;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn frame() -> Arc<SharedFrame> {
+        Arc::new(std::sync::Mutex::new(LiveFrame {
+            watchdog_pings: 0,
+            gpus: Vec::new(),
+            procs: Vec::new(),
+            control: None,
+            hostname: "test-host".into(),
+            started_ms: zionstats_core::shm::layout::now_ms(),
+        }))
+    }
+
+    fn get(path: &str, auth: Option<&str>) -> Request<()> {
+        let mut b = Request::builder().uri(path);
+        if let Some(v) = auth {
+            b = b.header("authorization", v);
+        }
+        b.body(()).unwrap()
+    }
+
+    #[test]
+    fn metrics_open_when_no_token_configured() {
+        let f = frame();
+        assert_eq!(
+            route(get("/metrics", None), &f, "t", false, "").status(),
+            StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn metrics_missing_header_401() {
+        let f = frame();
+        assert_eq!(
+            route(get("/metrics", None), &f, "t", false, "s3cret").status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+
+    #[test]
+    fn metrics_wrong_token_401() {
+        let f = frame();
+        assert_eq!(
+            route(
+                get("/metrics", Some("Bearer nope")),
+                &f,
+                "t",
+                false,
+                "s3cret"
+            )
+            .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            route(get("/metrics", Some("s3cret")), &f, "t", false, "s3cret").status(),
+            StatusCode::UNAUTHORIZED,
+            "raw token without the Bearer scheme must not authenticate"
+        );
+    }
+
+    #[test]
+    fn metrics_correct_token_200() {
+        let f = frame();
+        assert_eq!(
+            route(
+                get("/metrics", Some("Bearer s3cret")),
+                &f,
+                "t",
+                false,
+                "s3cret"
+            )
+            .status(),
+            StatusCode::OK
+        );
+    }
+
+    #[test]
+    fn snapshot_gated_healthz_open() {
+        let f = frame();
+        assert_eq!(
+            route(get("/snapshot", None), &f, "t", false, "s3cret").status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            route(get("/healthz", None), &f, "t", false, "s3cret").status(),
+            StatusCode::OK,
+            "liveness probe must stay unauthenticated"
+        );
+    }
+}

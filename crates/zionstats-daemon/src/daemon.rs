@@ -225,9 +225,17 @@ async fn run_async(opts: DaemonOpts) -> i32 {
         } else {
             cfg.daemon.port
         };
+        let export_token = cfg.export_token.clone();
         tokio::spawn(async move {
-            if let Err(e) =
-                crate::http::serve(&host, port, live, VERSION, cfg.expose_processes).await
+            if let Err(e) = crate::http::serve(
+                &host,
+                port,
+                live,
+                VERSION,
+                cfg.expose_processes,
+                &export_token,
+            )
+            .await
             {
                 log::warn!("{e}");
             }

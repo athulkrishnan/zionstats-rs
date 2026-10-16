@@ -71,6 +71,14 @@ pub fn print_resolved(cfg: &Config, warnings: &[String], overrides: &[String]) -
         "    expose_processes  = {} (metrics socket is [daemon] host:port)",
         cfg.expose_processes
     );
+    println!(
+        "    token             = {}",
+        if cfg.export_token.is_empty() {
+            "(none)"
+        } else {
+            "(set)"
+        }
+    );
     if !overrides.is_empty() {
         println!("  CLI overrides:");
         for o in overrides {
