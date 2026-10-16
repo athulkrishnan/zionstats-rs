@@ -147,6 +147,21 @@ pub fn load_verbose(path: &std::path::Path) -> (Config, Vec<String>) {
         }
     };
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Ok(md) = std::fs::metadata(path) {
+            let mode = md.permissions().mode();
+            if mode & 0o077 != 0 {
+                warnings.push(format!(
+                    "config {} is group/other-readable (mode {:o}); it can hold plug credentials -- chmod 600",
+                    path.display(),
+                    mode & 0o777
+                ));
+            }
+        }
+    }
+
     // top-level flat keys shared with the Python app
     if let Some(raw) = data.get("interval") {
         match as_f64(raw) {
@@ -394,3 +409,4 @@ mod tests {
         assert!(cfg.readonly);
     }
 }
+

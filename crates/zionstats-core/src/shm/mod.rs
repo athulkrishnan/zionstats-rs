@@ -65,8 +65,16 @@ impl ShmWriter {
             .create(true)
             .truncate(false)
             .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(path)?;
-        if file.metadata()?.len() != TOTAL_SIZE as u64 {
+        let md = file.metadata()?;
+        if !md.file_type().is_file() {
+            return Err(ShmError::Mismatch(format!(
+                "{}: not a regular file (symlink or special node?)",
+                path.display()
+            )));
+        }
+        if md.len() != TOTAL_SIZE as u64 {
             file.set_len(TOTAL_SIZE as u64)?;
         }
         if !flock_exclusive(&file)? {
@@ -104,6 +112,7 @@ impl ShmWriter {
     /// chown/chmods to `shm_group` afterwards.
     pub fn create(uid: u32) -> Result<ShmWriter, ShmError> {
         use std::os::unix::fs::OpenOptionsExt;
+        use std::os::unix::fs::MetadataExt;
         let path = shm_path(uid);
         let file = OpenOptions::new()
             .read(true)
@@ -111,8 +120,24 @@ impl ShmWriter {
             .create(true)
             .truncate(false)
             .mode(0o600)
+            .custom_flags(libc::O_NOFOLLOW)
             .open(&path)?;
-        if file.metadata()?.len() != TOTAL_SIZE as u64 {
+        let md = file.metadata()?;
+        if !md.file_type().is_file() {
+            return Err(ShmError::Mismatch(format!(
+                "{}: not a regular file (symlink or special node?)",
+                path.display()
+            )));
+        }
+        if md.uid() != uid {
+            return Err(ShmError::Mismatch(format!(
+                "{}: owned by uid {}, expected {}",
+                path.display(),
+                md.uid(),
+                uid
+            )));
+        }
+        if md.len() != TOTAL_SIZE as u64 {
             file.set_len(TOTAL_SIZE as u64)?;
         }
         {
@@ -545,5 +570,46 @@ mod tests {
             ShmReader::attach_path(&dir.path().join("nope")),
             Err(ShmError::NotFound(_))
         ));
+    }
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+
+    #[test]
+    fn symlink_at_shm_path_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let shm = dir.path().join("zionstats-symlink");
+        let victim = dir.path().join("victim.txt");
+        std::fs::write(&victim, b"important data here").unwrap();
+        std::os::unix::fs::symlink(&victim, &shm).unwrap();
+
+        let result = ShmWriter::create_at(&shm);
+        assert!(result.is_err(), "symlink must be rejected");
+
+        // victim file is unmodified
+        let content = std::fs::read(&victim).unwrap();
+        assert_eq!(content, b"important data here");
+        assert_eq!(content.len(), 19);
+    }
+
+    #[test]
+    fn directory_at_shm_path_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let shm = dir.path().join("zionstats-dir");
+        std::fs::create_dir(&shm).unwrap();
+
+        let result = ShmWriter::create_at(&shm);
+        assert!(result.is_err(), "directory must be rejected");
+    }
+
+    #[test]
+    fn normal_create_succeeds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("zionstats-ok");
+        // create the file first (create_at expects an existing file or creates one)
+        let result = ShmWriter::create_at(&path);
+        assert!(result.is_ok(), "normal create must succeed");
     }
 }
