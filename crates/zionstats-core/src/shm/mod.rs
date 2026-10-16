@@ -111,8 +111,8 @@ impl ShmWriter {
     /// writer lock. Mode 0600: same-uid readers only, unless the daemon
     /// chown/chmods to `shm_group` afterwards.
     pub fn create(uid: u32) -> Result<ShmWriter, ShmError> {
-        use std::os::unix::fs::OpenOptionsExt;
         use std::os::unix::fs::MetadataExt;
+        use std::os::unix::fs::OpenOptionsExt;
         let path = shm_path(uid);
         let file = OpenOptions::new()
             .read(true)
