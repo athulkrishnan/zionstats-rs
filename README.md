@@ -30,7 +30,9 @@ cargo build --release
 ./target/release/zionstats --demo
 ```
 
-<video src="assets/ZionStats_Demo.webm" controls muted autoplay loop width="100%"></video>
+![zionstats TUI monitoring an Ollama llama-server workload](assets/ZionStats_Demo.gif)
+
+[Watch full-quality video (webm)](assets/ZionStats_Demo.webm)
 
 Built for the local-LLM rig: the process table resolves `llama-server` /
 `vllm` to real VRAM + SM% utilization, the daemon exports Prometheus
