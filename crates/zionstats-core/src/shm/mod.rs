@@ -578,21 +578,15 @@ mod tests {
         // silent misparse (the strides moved in v2)
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("v1file");
-        let mut data = vec![0u8; TOTAL_SIZE];
         // forge a header with the current magic/abi but layout_version 1
-        let mut f = std::fs::File::create(&path).unwrap();
-        use std::io::Write;
-        drop(f);
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            f = std::fs::OpenOptions::new()
-                .read(true)
-                .write(true)
-                .mode(0o600)
-                .open(&path)
-                .unwrap();
-            f.set_len(TOTAL_SIZE as u64).unwrap();
-        }
+        let f = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .mode(0o600)
+            .open(&path)
+            .unwrap();
+        f.set_len(TOTAL_SIZE as u64).unwrap();
         let mut map = unsafe { memmap2::MmapMut::map_mut(&f).unwrap() };
         let mut h = ShmHeaderV1 {
             magic: *SHM_MAGIC,
