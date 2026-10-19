@@ -580,10 +580,11 @@ mod tests {
         let path = dir.path().join("v1file");
         // forge a header with the current magic/abi but layout_version 1
         use std::os::unix::fs::OpenOptionsExt;
-        let f = std::fs::OpenOptions::new()
+        let mut f = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
+            .truncate(true)
             .mode(0o600)
             .open(&path)
             .unwrap();
@@ -605,7 +606,7 @@ mod tests {
             flags: 0,
             _pad: [0; 56],
         };
-        let bytes = zerocopy::IntoBytes::as_bytes(&mut h);
+        let bytes = zerocopy::IntoBytes::as_bytes(&h);
         map[..bytes.len()].copy_from_slice(bytes);
         drop(map);
         drop(f);
