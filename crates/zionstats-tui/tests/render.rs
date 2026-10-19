@@ -38,6 +38,10 @@ fn frame_with(gpus: usize, procs: usize) -> OwnedFrame {
                 pstate: 0,
                 verdict: 0,
                 flags: 0,
+                ecc_sbe: u64::MAX,
+                ecc_dbe: u64::MAX,
+                vendor: 0,
+                _pad: [0; 23],
             }
         };
         put_fixed(&mut gpu.name, "NVIDIA GeForce RTX TEST");

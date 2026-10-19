@@ -1,8 +1,13 @@
-//! SHM layout v1 — byte-exact structures shared between the daemon
+//! SHM layout v2 — byte-exact structures shared between the daemon
 //! (writer) and any reader (TUI, scripts). `/dev/shm/zionstats-<uid>`,
 //! mode 0600, 256 KiB total. Native endianness: this is a same-host,
 //! per-boot artifact; `abi_tag` is written natively and validated on
 //! attach so any mismatch fails loudly instead of misparsing.
+//!
+//! v2 (this version): GPU_STRIDE 216 -> 256, appending `ecc_sbe`/`ecc_dbe`
+//! (u64 volatile ECC counters), a `vendor` byte, and padding to the
+//! stride. All later region offsets are derived and shift automatically;
+//! readers validate `layout_version == 2` and reject older files loudly.
 //!
 //! NaN f32 = unsupported/unknown (mirrors Python `None`; the exporter
 //! omits NaN series entirely).
@@ -11,7 +16,7 @@ use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 pub const SHM_MAGIC: &[u8; 8] = b"zionshm1";
 pub const ABI_TAG: u32 = 0x0102_0304;
-pub const LAYOUT_VERSION: u32 = 1;
+pub const LAYOUT_VERSION: u32 = 2;
 
 pub const MAX_GPUS: usize = 8;
 pub const MAX_PROCS: usize = 256;
@@ -22,7 +27,7 @@ pub const MAX_ALERTS: usize = 64;
 // region offsets (compile-time checked below)
 pub const HDR_SIZE: usize = 128;
 pub const GPUS_OFF: usize = HDR_SIZE;
-pub const GPU_STRIDE: usize = 216;
+pub const GPU_STRIDE: usize = 256;
 pub const PROCS_OFF: usize = GPUS_OFF + MAX_GPUS * GPU_STRIDE;
 pub const PROC_STRIDE: usize = 408;
 pub const CTRL_OFF: usize = PROCS_OFF + MAX_PROCS * PROC_STRIDE;
@@ -102,8 +107,14 @@ pub struct GpuSampleV1 {
     /// Verdict::Ok=0 Warn=1 Crit=2
     pub verdict: u8,
     /// validity bitmask: bit0 temp, bit1 fan, bit2 power, bit3 clocks,
-    /// bit4 pcie, bit5 energy, bit6 verdict
+    /// bit4 pcie, bit5 energy, bit6 verdict, bit7 ecc
     pub flags: u32,
+    /// volatile ECC since driver load; u64::MAX = unsupported (v2)
+    pub ecc_sbe: u64,
+    pub ecc_dbe: u64,
+    /// 0 unknown/nvidia, 1 amd, 2 intel, 3 demo (v2)
+    pub vendor: u8,
+    pub _pad: [u8; 23],
 }
 
 pub const GPU_FLAG_TEMP: u32 = 1 << 0;
@@ -113,6 +124,7 @@ pub const GPU_FLAG_CLOCKS: u32 = 1 << 3;
 pub const GPU_FLAG_PCIE: u32 = 1 << 4;
 pub const GPU_FLAG_ENERGY: u32 = 1 << 5;
 pub const GPU_FLAG_VERDICT: u32 = 1 << 6;
+pub const GPU_FLAG_ECC: u32 = 1 << 7;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, FromBytes, Immutable, IntoBytes, KnownLayout)]

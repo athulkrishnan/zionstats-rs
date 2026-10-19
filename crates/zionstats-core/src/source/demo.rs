@@ -71,6 +71,7 @@ impl DemoSource {
         } - if throttling { 620.0 } else { 0.0 }
             + self.jitter(30.0);
         Sample {
+            vendor: "nvidia".to_string(),
             ts: self.now(),
             index: 0,
             uuid: "GPU-demo-4070tis".into(),
@@ -138,6 +139,7 @@ impl DemoSource {
             (88.0 + self.jitter(5.0), 99.0 + self.jitter(1.0))
         };
         Sample {
+            vendor: "nvidia".to_string(),
             ts: self.now(),
             index: 1,
             uuid: "GPU-demo-h100".into(),

@@ -571,6 +571,58 @@ mod tests {
             Err(ShmError::NotFound(_))
         ));
     }
+
+    #[test]
+    fn attach_rejects_v1_layout_loudly() {
+        // a v1 file under a v2 reader must be a named error, never a
+        // silent misparse (the strides moved in v2)
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("v1file");
+        let mut data = vec![0u8; TOTAL_SIZE];
+        // forge a header with the current magic/abi but layout_version 1
+        let mut f = std::fs::File::create(&path).unwrap();
+        use std::io::Write;
+        drop(f);
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            f = std::fs::OpenOptions::new()
+                .read(true)
+                .write(true)
+                .mode(0o600)
+                .open(&path)
+                .unwrap();
+            f.set_len(TOTAL_SIZE as u64).unwrap();
+        }
+        let mut map = unsafe { memmap2::MmapMut::map_mut(&f).unwrap() };
+        let mut h = ShmHeaderV1 {
+            magic: *SHM_MAGIC,
+            abi_tag: ABI_TAG,
+            layout_version: 1,
+            total_size: TOTAL_SIZE as u64,
+            seqlock: 0,
+            daemon_pid: std::process::id(),
+            uid: 0,
+            start_ms: 0,
+            tick_id: 0,
+            gpu_count: 0,
+            proc_count: 0,
+            interval_ms: 0,
+            flags: 0,
+            _pad: [0; 56],
+        };
+        let bytes = zerocopy::IntoBytes::as_bytes(&mut h);
+        map[..bytes.len()].copy_from_slice(bytes);
+        drop(map);
+        drop(f);
+        let err = match ShmReader::attach_path(&path) {
+            Err(e) => e,
+            Ok(_) => panic!("v1 file must not attach under a v2 reader"),
+        };
+        assert!(
+            err.to_string().contains("layout 1"),
+            "rejection must name the layout version, got: {err}"
+        );
+    }
 }
 
 #[cfg(test)]

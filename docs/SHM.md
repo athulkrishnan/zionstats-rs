@@ -69,6 +69,8 @@ Container/pod attribution is resolved daemon-side from
 
 ## Versioning
 
-Layout v1 is frozen: additive change requires bumping `layout_version`
+Layout v2 is current: additive change requires bumping `layout_version`
 (and the reader's accept list). Never reorder or shrink existing fields;
-grow into the reserved tail.
+grow into the reserved tail. v1 -> v2 (2026-10-19) grew GPU_STRIDE
+216 -> 256 for the ECC counters + vendor byte; every later region offset
+is derived, so they shifted automatically.

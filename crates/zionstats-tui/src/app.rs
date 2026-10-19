@@ -517,4 +517,4 @@ fn render_procs(f: &mut Frame, area: ratatui::layout::Rect, procs: &[ProcEntryV1
 }
 
 // compile-time: TUI links against the same layout the daemon writes
-const _: () = assert!(zionstats_core::shm::layout::LAYOUT_VERSION == 1);
+const _: () = assert!(zionstats_core::shm::layout::LAYOUT_VERSION == 2);

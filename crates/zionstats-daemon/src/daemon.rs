@@ -12,9 +12,9 @@ use zionstats_core::control::CoolingMode;
 use zionstats_core::control::TickInputs;
 use zionstats_core::shm::layout::{
     now_ms, put_fixed, ControlStateV1, EnvBlockV1, GpuSampleV1, HistoryRingV1, ProcEntryV1,
-    GPU_FLAG_CLOCKS, GPU_FLAG_ENERGY, GPU_FLAG_FAN, GPU_FLAG_PCIE, GPU_FLAG_POWER, GPU_FLAG_TEMP,
-    GPU_FLAG_VERDICT, MAX_ALERTS, MAX_GPUS, MAX_PROCS, RING_LEN, RING_MEM_FRAC, RING_POWER_W,
-    RING_SM_CLOCK, RING_TEMP_GPU, RING_UTIL_GPU, RING_UTIL_MEM,
+    GPU_FLAG_CLOCKS, GPU_FLAG_ECC, GPU_FLAG_ENERGY, GPU_FLAG_FAN, GPU_FLAG_PCIE, GPU_FLAG_POWER,
+    GPU_FLAG_TEMP, GPU_FLAG_VERDICT, MAX_ALERTS, MAX_GPUS, MAX_PROCS, RING_LEN, RING_MEM_FRAC,
+    RING_POWER_W, RING_SM_CLOCK, RING_TEMP_GPU, RING_UTIL_GPU, RING_UTIL_MEM,
 };
 use zionstats_core::shm::ShmWriter;
 use zionstats_core::source::demo::DemoSource;
@@ -580,6 +580,10 @@ fn zeroed_gpu() -> GpuSampleV1 {
         pstate: -1,
         verdict: 0,
         flags: 0,
+        ecc_sbe: u64::MAX,
+        ecc_dbe: u64::MAX,
+        vendor: 0,
+        _pad: [0; 23],
     }
 }
 
@@ -629,6 +633,25 @@ fn fill_gpu(g: &mut GpuSampleV1, s: &Sample, ts_ms: u64) {
     if s.energy_mj.is_some() {
         flags |= GPU_FLAG_ENERGY;
     }
+    if let Some(v) = s.ecc_sbe {
+        g.ecc_sbe = v;
+        flags |= GPU_FLAG_ECC;
+    }
+    if let Some(v) = s.ecc_dbe {
+        g.ecc_dbe = v;
+    }
+    g.vendor = vendor_byte(&s.vendor);
     flags |= GPU_FLAG_VERDICT;
     g.flags = flags;
+}
+
+/// Vendor enum byte for the v2 layout (0 unknown/nvidia, 1 amd,
+/// 2 intel, 3 demo).
+pub fn vendor_byte(vendor: &str) -> u8 {
+    match vendor {
+        "amd" => 1,
+        "intel" => 2,
+        "demo" => 3,
+        _ => 0,
+    }
 }

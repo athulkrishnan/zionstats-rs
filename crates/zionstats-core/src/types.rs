@@ -30,6 +30,8 @@ pub struct Sample {
     pub index: u32,
     pub uuid: String,
     pub name: String,
+    /// nvidia | amd | intel | demo (empty = unknown)
+    pub vendor: String,
     pub pstate: Option<i8>,
     pub util_gpu: Option<f32>,
     pub util_mem: Option<f32>,
@@ -67,6 +69,7 @@ impl Default for Sample {
             index: 0,
             uuid: String::new(),
             name: String::new(),
+            vendor: String::new(),
             pstate: None,
             util_gpu: None,
             util_mem: None,

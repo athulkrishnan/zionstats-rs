@@ -8,7 +8,7 @@ use std::time::SystemTime;
 
 use nvml_wrapper::enum_wrappers::device::PerformanceState;
 use nvml_wrapper::enum_wrappers::device::{
-    Clock, PcieUtilCounter, TemperatureSensor, TemperatureThreshold,
+    Clock, EccCounter, MemoryError, PcieUtilCounter, TemperatureSensor, TemperatureThreshold,
 };
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::Nvml;
@@ -154,6 +154,15 @@ impl Source for NvmlSource {
                     s.clocks_mem_mhz = dev.clock_info(Clock::Memory).ok();
                     s.clocks_max_sm_mhz = dev.max_clock_info(Clock::SM).ok();
                     s.energy_mj = dev.total_energy_consumption().ok();
+                    // volatile ECC totals (Python parity); GeForce commonly
+                    // returns NotSupported -> honest None
+                    s.ecc_sbe = dev
+                        .total_ecc_errors(MemoryError::Corrected, EccCounter::Volatile)
+                        .ok();
+                    s.ecc_dbe = dev
+                        .total_ecc_errors(MemoryError::Uncorrected, EccCounter::Volatile)
+                        .ok();
+                    s.vendor = "nvidia".to_string();
                     if let Ok(bits) = dev.current_throttle_reasons() {
                         s.throttle_bits = bits.bits() as u32;
                         s.throttle = decode_throttle(bits.bits() as u32)

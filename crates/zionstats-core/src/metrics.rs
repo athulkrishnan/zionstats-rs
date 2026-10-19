@@ -3,7 +3,7 @@
 //! `zionstats_process_*`) so the shipped Grafana dashboard keeps working;
 //! NaN/None fields omit the series entirely (never emitted).
 
-use crate::shm::layout::{ControlStateV1, GpuSampleV1, ProcEntryV1};
+use crate::shm::layout::{ControlStateV1, GpuSampleV1, ProcEntryV1, GPU_FLAG_ECC};
 
 pub const CONTENT_TYPE_PLAIN: &str = "text/plain; version=0.0.4; charset=utf-8";
 pub const CONTENT_TYPE_OPENMETRICS: &str =
@@ -21,6 +21,17 @@ pub struct MetricsInput<'a> {
     pub expose_processes: bool,
     /// (plug name, live watts, session Wh) per metered plug
     pub plugs: &'a [(String, Option<f64>, Option<f64>)],
+}
+
+/// v2 layout vendor byte -> exporter label (matches the Python
+/// exporter's vendor values).
+pub fn vendor_name(v: u8) -> &'static str {
+    match v {
+        1 => "amd",
+        2 => "intel",
+        3 => "demo",
+        _ => "nvidia",
+    }
 }
 
 fn esc(v: &str) -> String {
@@ -67,13 +78,14 @@ pub fn render_metrics(m: &MetricsInput, openmetrics: bool) -> String {
         let name = fixed_str(&g.name);
         let uuid = fixed_str(&g.uuid);
         let labels = format!(
-            "gpu=\"{}\",name=\"{}\",uuid=\"{}\",device=\"{}\",modelName=\"{}\",Hostname=\"{}\"",
+            "gpu=\"{}\",name=\"{}\",uuid=\"{}\",device=\"{}\",modelName=\"{}\",Hostname=\"{}\",vendor=\"{}\"",
             g.index,
             esc(&name),
             esc(&uuid),
             g.index,
             esc(&name),
-            esc(m.hostname)
+            esc(m.hostname),
+            vendor_name(g.vendor)
         );
         series!(
             "gpu_utilization_percent",
@@ -194,6 +206,23 @@ pub fn render_metrics(m: &MetricsInput, openmetrics: bool) -> String {
             labels,
             Some(g.throttle_bits as f32)
         );
+        // volatile ECC totals (Python-parity family; u64::MAX = absent)
+        if g.flags & GPU_FLAG_ECC != 0 {
+            series!(
+                "gpu_ecc_errors_total",
+                "Volatile ECC errors",
+                "counter",
+                labels.clone() + ",type=\"corrected\"",
+                (g.ecc_sbe != u64::MAX).then_some(g.ecc_sbe as f32)
+            );
+            series!(
+                "gpu_ecc_errors_total",
+                "Volatile ECC errors",
+                "counter",
+                labels.clone() + ",type=\"uncorrected\"",
+                (g.ecc_dbe != u64::MAX).then_some(g.ecc_dbe as f32)
+            );
+        }
         series!(
             "gpu_energy_consumption_joules_total",
             "Cumulative energy since driver load (J; resets on driver reload)",
@@ -410,6 +439,10 @@ mod tests {
             pstate: 0,
             verdict: 0,
             flags: 0,
+            ecc_sbe: u64::MAX,
+            ecc_dbe: u64::MAX,
+            vendor: 0,
+            _pad: [0; 23],
         };
         put_fixed(&mut g.name, name);
         put_fixed(&mut g.uuid, "GPU-test");
@@ -465,7 +498,7 @@ mod tests {
         );
         assert_eq!(lines[1], "# TYPE zionstats_gpu_utilization_percent gauge");
         assert!(text.contains(
-            "zionstats_gpu_utilization_percent{gpu=\"0\",name=\"Weird \\\"GPU\\\" \\\\name\",uuid=\"GPU-test\",device=\"0\",modelName=\"Weird \\\"GPU\\\" \\\\name\",Hostname=\"box1\"} 42"
+            "zionstats_gpu_utilization_percent{gpu=\"0\",name=\"Weird \\\"GPU\\\" \\\\name\",uuid=\"GPU-test\",device=\"0\",modelName=\"Weird \\\"GPU\\\" \\\\name\",Hostname=\"box1\",vendor=\"nvidia\"} 42"
         ));
         assert!(
             text.contains("zionstats_gpu_pcie_rx_bytes_per_second") && text.contains("1000000")

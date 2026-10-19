@@ -46,6 +46,7 @@ impl MockSource {
 
     pub fn push_sample(&mut self, index: u32, util: f32, temp: f32, power_w: f32) {
         self.samples.push(Sample {
+            vendor: "nvidia".to_string(),
             ts: SystemTime::now(),
             index,
             uuid: format!("GPU-mock-{index}"),
