@@ -579,6 +579,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("v1file");
         // forge a header with the current magic/abi but layout_version 1
+        use std::os::unix::fs::OpenOptionsExt;
         let f = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
