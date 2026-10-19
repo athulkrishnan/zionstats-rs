@@ -324,13 +324,7 @@ fn enrich_from_proc(
         if let Ok(md) = std::fs::metadata(&base) {
             use std::os::unix::fs::MetadataExt;
             p.uid = md.uid();
-            p.user = uid_to_name(md.uid());
+            p.user = crate::procfs::uid_to_name(md.uid());
         }
     }
-}
-
-fn uid_to_name(uid: u32) -> String {
-    // numeric name keeps the hot path free of passwd lookups; documented
-    // delta vs Python's pwd-based user column
-    uid.to_string()
 }
