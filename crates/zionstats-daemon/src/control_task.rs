@@ -301,7 +301,7 @@ mod tests {
         // resyncs belief, the immediate re-fire bypasses min-on/off, and a
         // None readback changes nothing.
         use zionstats_core::control::Trigger;
-        let (clock, f) = shared_clock(1000.0);
+        let (_, f) = shared_clock(1000.0);
         let mut stack = ControlStack::default();
         let lie = MockPlug::new("liar");
         stack.plugs.push(Box::new(lie));
@@ -323,7 +323,7 @@ mod tests {
             readback: None,
             weather_age_s: Some(0.0),
         };
-        assert!(matches!(stack.tick(&load, &shutdown), Some(_)));
+        assert!(stack.tick(&load, &shutdown).is_some());
         assert!(stack.controller.as_ref().unwrap().state.on, "engaged");
 
         // external OFF toggle: the daemon-collected readback reports false
