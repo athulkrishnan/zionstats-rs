@@ -524,7 +524,9 @@ mod tests {
                 let reader = ShmReader { map, path };
                 let mut checks = 0u64;
                 barrier.wait();
-                while stop.load(AtomicOrdering::Relaxed) == 0 {
+                // a heavily loaded box can preempt a reader for the whole
+                // writer run -- keep going until at least one check lands
+                while stop.load(AtomicOrdering::Relaxed) == 0 || checks == 0 {
                     let frame = reader.read().unwrap();
                     // stale frames are the documented bounded-retry fallback
                     // (possibly mid-write); integrity is only guaranteed for

@@ -36,6 +36,9 @@ struct Cli {
     /// Replay a recorded trace instead of live hardware
     #[arg(long)]
     replay: Option<PathBuf>,
+    /// GPU data source: auto | nvidia | amd | intel
+    #[arg(long)]
+    provider: Option<String>,
 }
 
 impl From<&Cli> for DaemonOpts {
@@ -53,6 +56,7 @@ impl From<&Cli> for DaemonOpts {
                 .and_then(zionstats_core::control::CoolingMode::parse),
             record: c.record.clone(),
             replay: c.replay.clone(),
+            provider: c.provider.clone(),
         }
     }
 }

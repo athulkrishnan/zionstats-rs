@@ -43,6 +43,7 @@ fn sample_json(s: &Sample, ts_unix: f64) -> serde_json::Value {
         "throttle_bits": s.throttle_bits,
         "throttle": s.throttle,
         "temp_gpu": s.temp_gpu,
+        "temp_gpu_max": s.temp_gpu_max,
         "temp_mem": s.temp_mem,
         "temp_slowdown": s.temp_slowdown,
         "temp_shutdown": s.temp_shutdown,

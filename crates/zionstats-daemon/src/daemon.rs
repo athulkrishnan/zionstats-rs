@@ -35,6 +35,8 @@ pub struct DaemonOpts {
     pub record: Option<std::path::PathBuf>,
     /// replay a recorded trace instead of live hardware
     pub replay: Option<std::path::PathBuf>,
+    /// auto | nvidia | amd | intel (CLI overrides config)
+    pub provider: Option<String>,
 }
 
 impl Default for DaemonOpts {
@@ -49,6 +51,7 @@ impl Default for DaemonOpts {
             mode_override: None,
             record: None,
             replay: None,
+            provider: None,
         }
     }
 }
@@ -56,6 +59,8 @@ impl Default for DaemonOpts {
 enum ActiveSource {
     Demo(Box<DemoSource>),
     Replay(Box<zionstats_core::source::replay::ReplaySource>),
+    Amd(Box<zionstats_core::source::amd::AmdSource>),
+    Intel(Box<zionstats_core::source::intel::IntelSource>),
     #[cfg(feature = "nvml")]
     Nvml(Box<zionstats_core::source::nvml::NvmlSource>),
 }
@@ -65,13 +70,15 @@ impl ActiveSource {
         match self {
             ActiveSource::Demo(d) => d.as_mut(),
             ActiveSource::Replay(r) => r.as_mut(),
+            ActiveSource::Amd(a) => a.as_mut(),
+            ActiveSource::Intel(i) => i.as_mut(),
             #[cfg(feature = "nvml")]
             ActiveSource::Nvml(n) => n.as_mut(),
         }
     }
 }
 
-fn build_source(opts: &DaemonOpts) -> Result<ActiveSource, String> {
+fn build_source(opts: &DaemonOpts, provider: &str) -> Result<ActiveSource, String> {
     if let Some(path) = &opts.replay {
         let src = zionstats_core::source::replay::ReplaySource::from_path(path)
             .map_err(|e| format!("replay: {e}"))?;
@@ -85,17 +92,63 @@ fn build_source(opts: &DaemonOpts) -> Result<ActiveSource, String> {
     if opts.demo {
         return Ok(ActiveSource::Demo(Box::new(DemoSource::new())));
     }
-    #[cfg(feature = "nvml")]
-    {
-        zionstats_core::source::nvml::NvmlSource::try_new(None)
-            .map(|s| ActiveSource::Nvml(Box::new(s)))
-            .map_err(|e| {
-                format!("no live NVML source ({e}) -- run with --demo for the synthetic rig")
-            })
-    }
-    #[cfg(not(feature = "nvml"))]
-    {
-        Err("this build has no NVML support -- run with --demo".to_string())
+    match provider {
+        "amd" => Ok(ActiveSource::Amd(Box::new(
+            zionstats_core::source::amd::AmdSource::try_new(
+                std::path::Path::new("/sys/class/drm"),
+                std::path::Path::new("/proc"),
+            )
+            .map_err(|e| format!("no AMD GPUs on /sys/class/drm ({e})"))?,
+        ))),
+        "intel" => Ok(ActiveSource::Intel(Box::new(
+            zionstats_core::source::intel::IntelSource::try_new(
+                std::path::Path::new("/sys/class/drm"),
+                std::path::Path::new("/proc"),
+            )
+            .map_err(|e| format!("no Intel GPUs on /sys/class/drm ({e})"))?,
+        ))),
+        "nvidia" => {
+            #[cfg(feature = "nvml")]
+            {
+                zionstats_core::source::nvml::NvmlSource::try_new(None)
+                    .map(|s| ActiveSource::Nvml(Box::new(s)))
+                    .map_err(|e| format!("NVML init failed ({e})"))
+            }
+            #[cfg(not(feature = "nvml"))]
+            {
+                Err("this build has no NVML support".to_string())
+            }
+        }
+        // auto: NVML first, then the drm vendor scan
+        _ => {
+            #[cfg(feature = "nvml")]
+            {
+                match zionstats_core::source::nvml::NvmlSource::try_new(None) {
+                    Ok(s) => return Ok(ActiveSource::Nvml(Box::new(s))),
+                    Err(nvml_err) => {
+                        if let Ok(s) = zionstats_core::source::amd::AmdSource::try_new(
+                            std::path::Path::new("/sys/class/drm"),
+                            std::path::Path::new("/proc"),
+                        ) {
+                            return Ok(ActiveSource::Amd(Box::new(s)));
+                        }
+                        if let Ok(s) = zionstats_core::source::intel::IntelSource::try_new(
+                            std::path::Path::new("/sys/class/drm"),
+                            std::path::Path::new("/proc"),
+                        ) {
+                            return Ok(ActiveSource::Intel(Box::new(s)));
+                        }
+                        Err(format!(
+                            "no live source (NVML: {nvml_err}) -- run with --demo for the synthetic rig"
+                        ))
+                    }
+                }
+            }
+            #[cfg(not(feature = "nvml"))]
+            {
+                Err("this build has no NVML support -- run with --demo".to_string())
+            }
+        }
     }
 }
 
@@ -139,7 +192,11 @@ async fn run_async(opts: DaemonOpts) -> i32 {
     .clamp(0.25, 30.0);
     let readonly = opts.readonly || cfg.readonly || cfg.daemon.readonly;
 
-    let mut source = match build_source(&opts) {
+    let provider = opts
+        .provider
+        .clone()
+        .unwrap_or_else(|| cfg.daemon.provider.clone());
+    let mut source = match build_source(&opts, &provider) {
         Ok(s) => s,
         Err(e) => {
             log::error!("{e}");

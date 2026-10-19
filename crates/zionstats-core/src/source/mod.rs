@@ -1,7 +1,10 @@
 //! Telemetry sources. The `Source` trait abstracts NVML so the daemon,
 //! tests, and CI run GPU-free via `MockSource`/`DemoSource`.
 
+pub mod amd;
 pub mod demo;
+pub mod drmfd;
+pub mod intel;
 pub mod mock;
 #[cfg(feature = "nvml")]
 pub mod nvml;

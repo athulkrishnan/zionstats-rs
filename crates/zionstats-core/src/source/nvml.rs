@@ -205,7 +205,6 @@ impl Source for NvmlSource {
     }
 
     fn processes(&mut self) -> Vec<GpuProc> {
-        let now = SystemTime::now();
         let mut out: Vec<GpuProc> = Vec::new();
         for (pos, i) in self.indices.iter().enumerate() {
             let Ok(dev) = self.nvml.device_by_index(*i) else {
@@ -286,45 +285,7 @@ impl Source for NvmlSource {
                 }
             }
         }
-        enrich_from_proc(&mut out, now, &self.last_cpu);
+        crate::procfs::enrich_procs(&mut out, &mut self.last_cpu.lock().unwrap());
         out
-    }
-}
-
-/// /proc enrichment: uid, user, cmdline, cpu% delta, starttime.
-fn enrich_from_proc(
-    procs: &mut [GpuProc],
-    now: SystemTime,
-    last_cpu: &std::sync::Mutex<std::collections::HashMap<u32, (u64, SystemTime)>>,
-) {
-    let clk_tck: f64 = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
-    for p in procs.iter_mut() {
-        let base = std::path::Path::new("/proc").join(p.pid.to_string());
-        if let Ok(stat) = std::fs::read(base.join("stat")) {
-            if let Some(st) = crate::procfs::parse_stat(&stat) {
-                p.start_time = st.starttime;
-                let total = st.utime + st.stime;
-                let mut map = last_cpu.lock().unwrap();
-                if let Some((prev_total, prev_t)) = map.get(&p.pid) {
-                    let dt = now
-                        .duration_since(*prev_t)
-                        .map(|d| d.as_secs_f64())
-                        .unwrap_or(0.0);
-                    if dt > 0.0 && clk_tck > 0.0 {
-                        let delta = total.saturating_sub(*prev_total) as f64;
-                        p.cpu_pct = Some((delta / clk_tck / dt * 100.0) as f32);
-                    }
-                }
-                map.insert(p.pid, (total, now));
-            }
-        }
-        if let Ok(cmd) = std::fs::read(base.join("cmdline")) {
-            p.command = crate::procfs::parse_cmdline(&cmd);
-        }
-        if let Ok(md) = std::fs::metadata(&base) {
-            use std::os::unix::fs::MetadataExt;
-            p.uid = md.uid();
-            p.user = crate::procfs::uid_to_name(md.uid());
-        }
     }
 }

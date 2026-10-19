@@ -96,6 +96,8 @@ pub struct DaemonCfg {
     pub shm_group: Option<String>,
     /// opt-in direct GPU fan-PWM control (nvml manual handoff)
     pub fan_control: bool,
+    /// auto | nvidia | amd | intel
+    pub provider: String,
 }
 
 impl Default for DaemonCfg {
@@ -111,6 +113,7 @@ impl Default for DaemonCfg {
             shutdown_plug_policy: "auto_off".to_string(),
             shm_group: None,
             fan_control: false,
+            provider: "auto".to_string(),
         }
     }
 }
@@ -372,6 +375,11 @@ pub fn load_verbose(path: &std::path::Path) -> (Config, Vec<String>) {
         }
         if let Some(v) = sec.get("fan_control").and_then(as_bool) {
             d.fan_control = v;
+        }
+        if let Some(v) = sec.get("provider").and_then(as_string) {
+            if matches!(v.as_str(), "auto" | "nvidia" | "amd" | "intel") {
+                d.provider = v;
+            }
         }
         if let Some(v) = sec.get("fan_curve").and_then(|c| c.as_array()) {
             let mut curve = Vec::new();

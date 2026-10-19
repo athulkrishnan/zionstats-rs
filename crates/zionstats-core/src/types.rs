@@ -48,6 +48,8 @@ pub struct Sample {
     pub throttle_bits: u32,
     pub throttle: Vec<String>,
     pub temp_gpu: Option<f32>,
+    /// hottest-part sensor (junction/hotspot); None when absent
+    pub temp_gpu_max: Option<f32>,
     pub temp_mem: Option<f32>,
     pub temp_slowdown: Option<f32>,
     pub temp_shutdown: Option<f32>,
@@ -70,6 +72,7 @@ impl Default for Sample {
             uuid: String::new(),
             name: String::new(),
             vendor: String::new(),
+            temp_gpu_max: None,
             pstate: None,
             util_gpu: None,
             util_mem: None,

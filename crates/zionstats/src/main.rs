@@ -39,6 +39,9 @@ struct Cli {
     /// Replay a recorded trace (TUI over an embedded replay daemon)
     #[arg(long)]
     replay: Option<PathBuf>,
+    /// GPU data source: auto | nvidia | amd | intel [daemon only]
+    #[arg(long)]
+    provider: Option<String>,
     /// Emit shell completions for the given shell and exit
     #[arg(long, value_enum)]
     completions: Option<Shell>,
@@ -78,6 +81,7 @@ fn main() {
                 .and_then(zionstats_core::control::CoolingMode::parse),
             record: None,
             replay: cli.replay.clone(),
+            provider: cli.provider.clone(),
         };
         zionstats_daemon::daemon::run(opts)
     } else {

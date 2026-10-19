@@ -104,6 +104,10 @@ impl TraceFrame {
                     })
                     .unwrap_or_default(),
                 temp_gpu: d.get("temp_gpu").and_then(|x| x.as_f64()).map(|f| f as f32),
+                temp_gpu_max: d
+                    .get("temp_gpu_max")
+                    .and_then(|x| x.as_f64())
+                    .map(|f| f as f32),
                 temp_mem: d.get("temp_mem").and_then(|x| x.as_f64()).map(|f| f as f32),
                 temp_slowdown: d
                     .get("temp_slowdown")

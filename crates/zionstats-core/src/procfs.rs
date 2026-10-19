@@ -202,3 +202,41 @@ mod passwd_tests {
         assert_eq!(uid_to_name(2_147_000_000), "2147000000");
     }
 }
+
+/// /proc enrichment for GpuProc rows (uid, user, cmdline, cpu% delta,
+/// starttime) -- provider-agnostic, shared by the NVML/AMD/Intel sources.
+pub fn enrich_procs(
+    procs: &mut [crate::types::GpuProc],
+    last_cpu: &mut std::collections::HashMap<u32, (u64, std::time::SystemTime)>,
+) {
+    let now = std::time::SystemTime::now();
+    let clk_tck: f64 = unsafe { libc::sysconf(libc::_SC_CLK_TCK) } as f64;
+    for p in procs.iter_mut() {
+        let base = std::path::Path::new("/proc").join(p.pid.to_string());
+        if let Ok(stat) = std::fs::read(base.join("stat")) {
+            if let Some(st) = parse_stat(&stat) {
+                p.start_time = st.starttime;
+                let total = st.utime + st.stime;
+                if let Some((prev_total, prev_t)) = last_cpu.get(&p.pid) {
+                    let dt = now
+                        .duration_since(*prev_t)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(0.0);
+                    if dt > 0.0 && clk_tck > 0.0 {
+                        let delta = total.saturating_sub(*prev_total) as f64;
+                        p.cpu_pct = Some((delta / clk_tck / dt * 100.0) as f32);
+                    }
+                }
+                last_cpu.insert(p.pid, (total, now));
+            }
+        }
+        if let Ok(cmd) = std::fs::read(base.join("cmdline")) {
+            p.command = parse_cmdline(&cmd);
+        }
+        if let Ok(md) = std::fs::metadata(&base) {
+            use std::os::unix::fs::MetadataExt;
+            p.uid = md.uid();
+            p.user = uid_to_name(md.uid());
+        }
+    }
+}

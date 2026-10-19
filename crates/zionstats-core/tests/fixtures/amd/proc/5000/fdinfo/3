@@ -1,0 +1,8 @@
+pos:	64
+flags:	02
+mnt_id:	26
+drm-driver:	i915
+drm-client-id:	77
+drm-cycles-rcs0:	10
+drm-total-cycles-rcs0:	100
+drm-memory-vram:	99

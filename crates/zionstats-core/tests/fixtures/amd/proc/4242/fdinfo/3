@@ -1,0 +1,10 @@
+pos:	480000
+flags:	0100002
+mnt_id:	26
+drm-driver:	amdgpu
+drm-client-id:	42
+drm-pdev:	0000:03:00.0
+drm-cycles-gfx:	1000
+drm-total-cycles-gfx:	10000
+drm-memory-vram:	4096
+drm-memory-gtt:	512

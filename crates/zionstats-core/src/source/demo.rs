@@ -47,6 +47,114 @@ impl DemoSource {
         SystemTime::now()
     }
 
+    /// GPU 2: AMD RDNA3 -- edge/junction split, junction peaking near
+    /// 108 C mid-arc (the paste/pad-failure signal).  Honest gaps mirror
+    /// the AmdSource: no util_mem, no energy counter, no fan RPM.
+    fn sample_gpu2_amd(&self, t: f64) -> Sample {
+        let load = if t > 30.0 && t < 95.0 {
+            98.0 + self.jitter(4.0)
+        } else {
+            20.0 + self.jitter(5.0)
+        };
+        let edge = (55.0 + ((t - 8.0) * 0.9).min(15.0).max(0.0) - ((t - 95.0) * 1.4).max(0.0)
+            + self.jitter(0.7))
+        .clamp(52.0, 70.0);
+        let junc = (edge + 18.0 + 20.0 * ((t - 20.0) / 40.0).clamp(0.0, 1.0)
+            - ((t - 100.0) * 1.6).max(0.0))
+        .clamp(edge + 8.0, 108.0);
+        let junc_hot = junc >= 100.0;
+        Sample {
+            ts: self.now(),
+            index: 2,
+            uuid: "AMD-0000:0b:00.0".into(),
+            name: "AMD Radeon RX 7900 XTX".into(),
+            vendor: "amd".into(),
+            util_gpu: Some(load as f32),
+            util_mem: None, // amdgpu has no bandwidth utilization
+            util_enc: None,
+            util_dec: None,
+            pstate: None,
+            mem_used: (if t < 20.0 { 6.0 } else { 20.5 } * (1 << 30) as f64) as u64,
+            mem_total: 24 * (1 << 30) as u64,
+            power_w: Some(if t > 15.0 {
+                (30.0 + load * 4.2).min(452.0) as f32
+            } else {
+                29.0
+            }),
+            power_limit_w: Some(455.0),
+            clocks_sm_mhz: Some(if load > 40.0 { 2310 } else { 480 }),
+            clocks_mem_mhz: Some(2500),
+            clocks_max_sm_mhz: Some(2500),
+            energy_mj: None, // no hw counter: session Wh via integration
+            throttle_bits: 0,
+            throttle: if junc_hot {
+                vec!["SW-Thermal".into(), "Junction-Hot".into()]
+            } else {
+                vec![]
+            },
+            temp_gpu: Some(edge as f32),
+            temp_gpu_max: Some(junc as f32),
+            temp_mem: Some(84.0),
+            temp_slowdown: Some(90.0),
+            temp_shutdown: Some(100.0),
+            fan_pct: Some(((edge - 30.0) * 2.2).clamp(20.0, 100.0) as f32),
+            pcie_gen_cur: Some(4),
+            pcie_gen_max: Some(4),
+            pcie_width_cur: Some(16),
+            pcie_width_max: Some(16),
+            pcie_rx_kbps: Some(((load - 10.0).max(0.0) * 21_000.0) as u32),
+            pcie_tx_kbps: Some(((load - 10.0).max(0.0) * 4_200.0) as u32),
+            ecc_sbe: None,
+            ecc_dbe: None,
+        }
+    }
+
+    /// GPU 3: Intel iGPU -- honest gaps mirror the IntelSource: no power
+    /// (no GPU-attributable sysfs path), no fan, no enc/dec.
+    fn sample_gpu3_intel(&self, t: f64) -> Sample {
+        let load = if t > 35.0 && t < 90.0 {
+            80.0 + self.jitter(5.0)
+        } else {
+            25.0 + self.jitter(4.0)
+        };
+        Sample {
+            ts: self.now(),
+            index: 3,
+            uuid: "INTEL-0000:00:02.0".into(),
+            name: "Intel Iris Xe Graphics".into(),
+            vendor: "intel".into(),
+            util_gpu: Some(load as f32),
+            util_mem: None,
+            util_enc: None,
+            util_dec: None,
+            pstate: None,
+            mem_used: (if t < 35.0 { 0.4 } else { 7.5 } * (1 << 30) as f64) as u64,
+            mem_total: 16 * (1 << 30) as u64,
+            power_w: None, // provider never reports it -- demo matches
+            power_limit_w: None,
+            clocks_sm_mhz: Some(if load > 50.0 { 2100 } else { 400 }),
+            clocks_mem_mhz: None,
+            clocks_max_sm_mhz: Some(2100),
+            energy_mj: None,
+            throttle_bits: 0,
+            throttle: vec![],
+            temp_gpu: Some((45.0 + ((t - 30.0) * 0.5).min(18.0).max(0.0)) as f32),
+            temp_gpu_max: None,
+            temp_mem: None,
+            temp_slowdown: Some(85.0),
+            temp_shutdown: Some(100.0),
+            fan_pct: None,
+            pcie_gen_cur: None,
+            pcie_gen_max: None,
+            pcie_width_cur: None,
+            pcie_width_max: None,
+            pcie_rx_kbps: None,
+            pcie_tx_kbps: None,
+            ecc_sbe: None,
+            ecc_dbe: None,
+        }
+    }
+
     fn sample_gpu0(&self, t: f64) -> Sample {
         let load: f64 = if t < 15.0 {
             3.0 + self.jitter(2.0)
@@ -71,11 +179,11 @@ impl DemoSource {
         } - if throttling { 620.0 } else { 0.0 }
             + self.jitter(30.0);
         Sample {
-            vendor: "nvidia".to_string(),
             ts: self.now(),
             index: 0,
             uuid: "GPU-demo-4070tis".into(),
             name: "NVIDIA GeForce RTX 4070 Ti SUPER".into(),
+            vendor: "nvidia".into(),
             pstate: Some(if load > 8.0 { 0 } else { 8 }),
             util_gpu: Some(load as f32),
             util_mem: Some((load * 0.82 + self.jitter(6.0)).clamp(0.0, 100.0) as f32),
@@ -127,6 +235,7 @@ impl DemoSource {
             pcie_tx_kbps: Some(((load - 20.0).max(0.0) * 4_000.0) as u32),
             ecc_sbe: Some(0),
             ecc_dbe: Some(0),
+            temp_gpu_max: None,
         }
     }
 
@@ -139,11 +248,11 @@ impl DemoSource {
             (88.0 + self.jitter(5.0), 99.0 + self.jitter(1.0))
         };
         Sample {
-            vendor: "nvidia".to_string(),
             ts: self.now(),
             index: 1,
             uuid: "GPU-demo-h100".into(),
             name: "NVIDIA H100 PCIe".into(),
+            vendor: "nvidia".into(),
             pstate: Some(if l1 > 8.0 { 0 } else { 2 }),
             util_gpu: Some(l1 as f32),
             util_mem: Some(m1 as f32),
@@ -200,6 +309,7 @@ impl DemoSource {
             }),
             ecc_sbe: Some(2),
             ecc_dbe: Some(0),
+            temp_gpu_max: None,
         }
     }
 }
@@ -228,12 +338,27 @@ impl Source for DemoSource {
                 name: "NVIDIA H100 PCIe".into(),
                 uuid: "GPU-demo-h100".into(),
             },
+            DeviceInfo {
+                index: 2,
+                name: "AMD Radeon RX 7900 XTX".into(),
+                uuid: "AMD-0000:0b:00.0".into(),
+            },
+            DeviceInfo {
+                index: 3,
+                name: "Intel Iris Xe Graphics".into(),
+                uuid: "INTEL-0000:00:02.0".into(),
+            },
         ])
     }
 
     fn sample(&mut self) -> Vec<Sample> {
         let t = self.phase();
-        vec![self.sample_gpu0(t), self.sample_gpu1(t)]
+        vec![
+            self.sample_gpu0(t),
+            self.sample_gpu1(t),
+            self.sample_gpu2_amd(t),
+            self.sample_gpu3_intel(t),
+        ]
     }
 
     fn processes(&mut self) -> Vec<GpuProc> {
@@ -314,11 +439,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn demo_four_devices_with_vendors() {
+        let mut d = DemoSource::new();
+        let devs = d.devices().unwrap();
+        assert_eq!(devs.len(), 4);
+        let samples = d.sample();
+        assert_eq!(samples.len(), 4);
+        assert_eq!(samples[0].vendor, "nvidia");
+        assert_eq!(samples[1].vendor, "nvidia");
+        let amd = &samples[2];
+        assert_eq!(amd.vendor, "amd");
+        assert_eq!(amd.mem_total, 24 * (1 << 30) as u64);
+        let (junc, edge) = (amd.temp_gpu_max.unwrap(), amd.temp_gpu.unwrap());
+        assert!(junc >= edge, "junction never below edge");
+        let intel = &samples[3];
+        assert_eq!(intel.vendor, "intel");
+        assert_eq!(
+            intel.power_w, None,
+            "demo mirrors the provider's honest gap"
+        );
+    }
+
+    #[test]
     fn demo_arcs_are_deterministic_per_phase() {
         let mut d = DemoSource::new();
         d.phase_override = Some(45.0);
         let s = d.sample();
-        assert_eq!(s.len(), 2);
+        assert_eq!(s.len(), 4, "two NVIDIA + AMD + Intel");
         assert!(
             s[0].util_gpu.unwrap() > 90.0,
             "t=45 is the sustained-load phase"
@@ -336,6 +483,10 @@ mod tests {
             throttled[0].throttle,
             vec!["SW-Thermal"],
             "t=60 is inside the throttle arc"
+        );
+        assert!(
+            throttled[2].throttle.contains(&"SW-Thermal".to_string()),
+            "AMD junction crosses 100C mid-arc -> thermal verdict"
         );
 
         d.phase_override = Some(5.0);
