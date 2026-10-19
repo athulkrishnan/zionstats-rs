@@ -26,7 +26,9 @@ struct Cli {
 
 fn main() {
     let cli = Cli::parse();
+    let cfg = zionstats_core::config::load(&zionstats_core::config::config_path(None));
     let code = run(TuiOpts {
+        theme_name: cfg.theme,
         interval_s: cli.interval,
         readonly: cli.readonly,
         exit_after_ms: cli.exit_after_ms,

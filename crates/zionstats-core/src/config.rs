@@ -70,6 +70,8 @@ impl Default for WeatherCfg {
 pub struct Config {
     pub tui_interval_s: f64,
     pub readonly: bool,
+    /// theme name (validated against the TUI registry; garbage -> predawn)
+    pub theme: String,
     pub daemon: DaemonCfg,
     pub cooling: ControlConfig,
     pub plugs: Vec<PlugCfg>,
@@ -148,6 +150,7 @@ impl Default for Config {
         Config {
             tui_interval_s: 0.25,
             readonly: false,
+            theme: "predawn".to_string(),
             daemon: DaemonCfg::default(),
             cooling: ControlConfig::default(),
             plugs: Vec::new(),
@@ -208,6 +211,9 @@ pub fn load_verbose(path: &std::path::Path) -> (Config, Vec<String>) {
     }
     if let Some(v) = data.get("readonly").and_then(as_bool) {
         cfg.readonly = v;
+    }
+    if let Some(v) = data.get("theme").and_then(as_string) {
+        cfg.theme = v;
     }
 
     // [cooling] — same keys/defaults as Python config_from_section
@@ -481,6 +487,17 @@ mod tests {
     fn bool_coercion_strings() {
         let cfg = load(&write("readonly = \"yes\"\n"));
         assert!(cfg.readonly);
+    }
+
+    #[test]
+    fn theme_key_coerced() {
+        let cfg = load(&write("theme = \"nord\"\n"));
+        assert_eq!(cfg.theme, "nord");
+        // unknown names stay in the config; the TUI registry falls back
+        // to predawn at lookup (theme_by_name)
+        let cfg = load(&write("theme = 12345\n"));
+        assert_eq!(cfg.theme, "12345", "tolerant coercion, UI decides");
+        assert_eq!(Config::default().theme, "predawn");
     }
 
     #[test]

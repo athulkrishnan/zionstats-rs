@@ -38,9 +38,88 @@ impl SortMode {
     }
 }
 
+use crate::theme::Theme;
+
+/// Theme picker overlay: centered list, live-previewed selection.
+fn render_theme_picker(f: &mut Frame, cand: usize, orig: usize) {
+    use ratatui::widgets::{Clear, List, ListItem, ListState};
+    let area = f.area();
+    let w = 34u16.min(area.width);
+    let h = (crate::theme::THEMES.len() as u16 + 2).min(area.height);
+    let rect = ratatui::layout::Rect {
+        x: (area.width.saturating_sub(w)) / 2,
+        y: (area.height.saturating_sub(h)) / 2,
+        width: w,
+        height: h,
+    };
+    let sel = ratatui::style::Color::Indexed(
+        crate::theme::THEMES[cand].slots[crate::theme::S_BORDER_SEL],
+    );
+    let items: Vec<ListItem> = crate::theme::THEMES
+        .iter()
+        .enumerate()
+        .map(|(i, th)| {
+            let mark = if i == orig { " *" } else { "" };
+            ListItem::new(format!(" {}{} ", th.name, mark))
+        })
+        .collect();
+    let list = List::new(items)
+        .block(
+            ratatui::widgets::Block::default()
+                .borders(ratatui::widgets::Borders::ALL)
+                .border_set(ratatui::symbols::border::ROUNDED)
+                .title(Span::styled(
+                    " theme (j/k, Enter keep, Esc revert) ",
+                    Style::default().fg(sel).add_modifier(Modifier::BOLD),
+                )),
+        )
+        .highlight_style(Style::default().bg(sel).fg(ratatui::style::Color::Indexed(
+            crate::theme::THEMES[cand].slots[crate::theme::S_BG],
+        )));
+    f.render_widget(Clear, rect);
+    f.render_stateful_widget(
+        list,
+        rect,
+        &mut ListState::default().with_selected(Some(cand)),
+    );
+}
+
+fn bg(t: &Theme) -> Color {
+    Color::Indexed(t.slots[crate::theme::S_BG])
+}
+fn fg(t: &Theme) -> Color {
+    Color::Indexed(t.slots[crate::theme::S_FG])
+}
+fn dim(t: &Theme) -> Color {
+    Color::Indexed(t.slots[crate::theme::S_DIM])
+}
+fn border(t: &Theme) -> Color {
+    Color::Indexed(t.slots[crate::theme::S_BORDER])
+}
+fn border_sel(t: &Theme) -> Color {
+    Color::Indexed(t.slots[crate::theme::S_BORDER_SEL])
+}
+fn accent(t: &Theme) -> Color {
+    Color::Indexed(t.slots[crate::theme::S_ACCENT])
+}
+fn accent2(t: &Theme) -> Color {
+    Color::Indexed(t.slots[crate::theme::S_ACCENT2])
+}
+fn ok(t: &Theme) -> Color {
+    Color::Indexed(t.slots[crate::theme::S_OK])
+}
+fn warn(t: &Theme) -> Color {
+    Color::Indexed(t.slots[crate::theme::S_WARN])
+}
+fn crit(t: &Theme) -> Color {
+    Color::Indexed(t.slots[crate::theme::S_CRIT])
+}
+
 pub struct TuiOpts {
     pub interval_s: f64,
     pub readonly: bool,
+    /// theme name from the shared config; garbage falls back to predawn
+    pub theme_name: String,
     /// hidden: exit after N ms (launch benchmark)
     pub exit_after_ms: Option<u64>,
     /// hidden: count draw calls (bench output)
@@ -72,6 +151,11 @@ pub fn run(opts: TuiOpts) -> i32 {
     let started = Instant::now();
     let mut interval = opts.interval_s.clamp(0.25, 30.0);
     let mut paused = false;
+    let mut theme: &'static crate::theme::Theme =
+        crate::theme::theme_by_name(&opts.theme_name).unwrap_or_else(crate::theme::default_theme);
+    // (candidate index, pre-open index) -- live preview while navigating,
+    // Esc reverts, Enter keeps for the session (no config write)
+    let mut theme_pick: Option<(usize, usize)> = None;
     let mut sort = SortMode::MemDesc;
     let mut needs_redraw = true; // state changed (badge, pause, key) -> draw now
     let mut frames = 0u64;
@@ -91,7 +175,49 @@ pub fn run(opts: TuiOpts) -> i32 {
                 if k.kind == crossterm::event::KeyEventKind::Press {
                     use crossterm::event::KeyCode;
                     match k.code {
-                        KeyCode::Char('q') | KeyCode::Esc => break 0,
+                        KeyCode::Char('t') => {
+                            theme_pick = match theme_pick {
+                                None => {
+                                    let idx = crate::theme::THEMES
+                                        .iter()
+                                        .position(|x| x.name == theme.name)
+                                        .unwrap_or(0);
+                                    Some((idx, idx))
+                                }
+                                Some((_, orig)) => {
+                                    theme = &crate::theme::THEMES[orig];
+                                    None
+                                }
+                            };
+                            needs_redraw = true;
+                        }
+                        KeyCode::Char('q') | KeyCode::Esc => {
+                            if let Some((_, orig)) = theme_pick {
+                                theme = &crate::theme::THEMES[orig];
+                                theme_pick = None;
+                                needs_redraw = true;
+                            } else {
+                                break 0;
+                            }
+                        }
+                        KeyCode::Char('j') | KeyCode::Down if theme_pick.is_some() => {
+                            let (cand, orig) = theme_pick.unwrap();
+                            let next = (cand + 1).min(crate::theme::THEMES.len() - 1);
+                            theme = &crate::theme::THEMES[next];
+                            theme_pick = Some((next, orig));
+                            needs_redraw = true;
+                        }
+                        KeyCode::Char('k') | KeyCode::Up if theme_pick.is_some() => {
+                            let (cand, orig) = theme_pick.unwrap();
+                            let next = cand.saturating_sub(1);
+                            theme = &crate::theme::THEMES[next];
+                            theme_pick = Some((next, orig));
+                            needs_redraw = true;
+                        }
+                        KeyCode::Enter if theme_pick.is_some() => {
+                            theme_pick = None; // keep the previewed theme
+                            needs_redraw = true;
+                        }
                         KeyCode::Char(' ') | KeyCode::Char('p') => {
                             paused = !paused;
                             needs_redraw = true;
@@ -124,7 +250,18 @@ pub fn run(opts: TuiOpts) -> i32 {
                 }
             }
             if let (Some(term), Some(frame)) = (terminal.as_mut(), last_frame.as_ref()) {
-                let _ = term.draw(|f| ui(f, frame, paused, interval, sort, opts.readonly));
+                let _ = term.draw(|f| {
+                    ui(
+                        f,
+                        frame,
+                        paused,
+                        interval,
+                        sort,
+                        opts.readonly,
+                        theme,
+                        theme_pick,
+                    )
+                });
                 if first_frame_ms.is_none() {
                     first_frame_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
                 }
@@ -139,7 +276,18 @@ pub fn run(opts: TuiOpts) -> i32 {
         }
         if needs_redraw {
             if let (Some(term), Some(frame)) = (terminal.as_mut(), last_frame.as_ref()) {
-                let _ = term.draw(|f| ui(f, frame, paused, interval, sort, opts.readonly));
+                let _ = term.draw(|f| {
+                    ui(
+                        f,
+                        frame,
+                        paused,
+                        interval,
+                        sort,
+                        opts.readonly,
+                        theme,
+                        theme_pick,
+                    )
+                });
                 frames += 1;
             }
             needs_redraw = false;
@@ -190,9 +338,37 @@ pub fn render_for_test(
     interval: f64,
     readonly: bool,
 ) {
-    ui(f, frame, paused, interval, SortMode::MemDesc, readonly)
+    render_for_test_theme(
+        f,
+        frame,
+        paused,
+        interval,
+        readonly,
+        crate::theme::default_theme(),
+    )
 }
 
+pub fn render_for_test_theme(
+    f: &mut Frame,
+    frame: &OwnedFrame,
+    paused: bool,
+    interval: f64,
+    readonly: bool,
+    theme: &crate::theme::Theme,
+) {
+    ui(
+        f,
+        frame,
+        paused,
+        interval,
+        SortMode::MemDesc,
+        readonly,
+        theme,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn ui(
     f: &mut Frame,
     frame: &OwnedFrame,
@@ -200,6 +376,8 @@ fn ui(
     interval: f64,
     sort: SortMode,
     readonly: bool,
+    theme: &crate::theme::Theme,
+    theme_pick: Option<(usize, usize)>,
 ) {
     let alive = frame.daemon_alive();
     let [header, mut body, footer] = Layout::vertical([
@@ -224,20 +402,14 @@ fn ui(
     let status = if !alive {
         Span::styled(
             " DAEMON DOWN ",
-            Style::default().bg(Color::Red).fg(Color::White),
+            Style::default().bg(crit(theme)).fg(bg(theme)),
         )
     } else if frame.stale {
-        Span::styled(
-            " STALE ",
-            Style::default().bg(Color::Yellow).fg(Color::Black),
-        )
+        Span::styled(" STALE ", Style::default().bg(warn(theme)).fg(bg(theme)))
     } else if paused {
-        Span::styled(
-            " PAUSED ",
-            Style::default().bg(Color::Blue).fg(Color::White),
-        )
+        Span::styled(" PAUSED ", Style::default().bg(accent(theme)).fg(bg(theme)))
     } else {
-        Span::styled(" LIVE ", Style::default().bg(Color::Green).fg(Color::Black))
+        Span::styled(" LIVE ", Style::default().bg(ok(theme)).fg(bg(theme)))
     };
     let ro = if readonly || flags & 1 != 0 {
         " RO"
@@ -249,7 +421,7 @@ fn ui(
             Span::styled(
                 "zionstats",
                 Style::default()
-                    .fg(Color::Cyan)
+                    .fg(border_sel(theme))
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(format!(" {env_host} [{mode_tag}] {driver}{ro} ")),
@@ -282,7 +454,7 @@ fn ui(
         ])
         .areas(body);
         if control_row == 1 {
-            render_control_row(f, control_area, &frame.control);
+            render_control_row(f, control_area, &frame.control, theme);
         }
         let card_chunks = Layout::vertical(
             (0..n as u16)
@@ -297,17 +469,18 @@ fn ui(
                 g,
                 frame.rings.get(i),
                 frame.insights.get(i),
+                theme,
             );
         }
-        render_procs(f, procs, &frame.procs, sort);
+        render_procs(f, procs, &frame.procs, sort, theme);
         if !alerts.is_empty() {
             let lines: Vec<Line> = alerts
                 .iter()
                 .map(|a| {
                     let style = match a.level {
-                        2 => Style::default().fg(Color::Red),
-                        1 => Style::default().fg(Color::Yellow),
-                        _ => Style::default().fg(Color::Gray),
+                        2 => Style::default().fg(crit(theme)),
+                        1 => Style::default().fg(warn(theme)),
+                        _ => Style::default().fg(fg(theme)),
                     };
                     Line::from(Span::styled(format!("! {}", get_fixed(&a.msg)), style))
                 })
@@ -319,13 +492,13 @@ fn ui(
     // ---- footer
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled("q", Style::default().fg(Color::Cyan)),
+            Span::styled("q", Style::default().fg(accent(theme))),
             Span::raw(" quit  "),
-            Span::styled("space", Style::default().fg(Color::Cyan)),
+            Span::styled("space", Style::default().fg(accent(theme))),
             Span::raw(" pause  "),
-            Span::styled("+/-", Style::default().fg(Color::Cyan)),
+            Span::styled("+/-", Style::default().fg(accent(theme))),
             Span::raw(" rate  "),
-            Span::styled("s", Style::default().fg(Color::Cyan)),
+            Span::styled("s", Style::default().fg(accent(theme))),
             Span::raw(format!(" sort:{}  ", sort.label())),
             Span::raw(format!(
                 "tick {} · gpus {} · procs {}",
@@ -336,6 +509,9 @@ fn ui(
         ])),
         footer,
     );
+    if let Some((cand, orig)) = theme_pick {
+        render_theme_picker(f, cand, orig);
+    }
 }
 
 fn render_gpu_card(
@@ -344,6 +520,7 @@ fn render_gpu_card(
     g: &GpuSampleV1,
     ring: Option<&zionstats_core::shm::layout::HistoryRingV1>,
     insight: Option<&zionstats_core::shm::layout::InsightBlockV1>,
+    theme: &crate::theme::Theme,
 ) {
     let name = get_fixed(&g.name);
     let pstate_str = if g.pstate < 0 {
@@ -362,10 +539,11 @@ fn render_gpu_card(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(symbols::border::ROUNDED)
+        .border_style(Style::default().fg(border(theme)))
         .title(Span::styled(
             title,
             Style::default()
-                .fg(Color::Cyan)
+                .fg(border_sel(theme))
                 .add_modifier(Modifier::BOLD),
         ));
     let inner_area = block.inner(area);
@@ -379,11 +557,11 @@ fn render_gpu_card(
         Layout::horizontal([Constraint::Percentage(50), Constraint::Percentage(50)]).areas(row2);
 
     let temp_style = if g.temp_gpu >= 83.0 {
-        Color::Red
+        crit(theme)
     } else if g.temp_gpu >= 70.0 {
-        Color::Yellow
+        warn(theme)
     } else {
-        Color::Green
+        ok(theme)
     };
     f.render_widget(
         Gauge::default()
@@ -394,7 +572,7 @@ fn render_gpu_card(
     );
     f.render_widget(
         Gauge::default()
-            .gauge_style(Style::default().fg(Color::Magenta))
+            .gauge_style(Style::default().fg(accent2(theme)))
             .percent(((g.power_w / g.power_limit_w.max(1.0)) * 100.0).clamp(0.0, 100.0) as u16)
             .label(format!("{:.0}/{:.0}W", g.power_w, g.power_limit_w)),
         power_c,
@@ -443,7 +621,7 @@ fn render_gpu_card(
             f.render_widget(
                 Sparkline::default()
                     .data(&series)
-                    .style(Style::default().fg(Color::Cyan)),
+                    .style(Style::default().fg(accent(theme))),
                 spark,
             );
         }
@@ -456,6 +634,7 @@ fn render_control_row(
     f: &mut Frame,
     area: ratatui::layout::Rect,
     c: &zionstats_core::shm::layout::ControlStateV1,
+    theme: &crate::theme::Theme,
 ) {
     let mode = match c.mode {
         0 => "off",
@@ -477,9 +656,9 @@ fn render_control_row(
         "pwm driver".to_string()
     };
     let style = if c.state_on != 0 {
-        Style::default().fg(Color::Green)
+        Style::default().fg(ok(theme))
     } else {
-        Style::default().fg(Color::DarkGray)
+        Style::default().fg(dim(theme))
     };
     f.render_widget(
         Paragraph::new(Line::from(Span::styled(
@@ -494,7 +673,13 @@ fn render_control_row(
     );
 }
 
-fn render_procs(f: &mut Frame, area: ratatui::layout::Rect, procs: &[ProcEntryV1], sort: SortMode) {
+fn render_procs(
+    f: &mut Frame,
+    area: ratatui::layout::Rect,
+    procs: &[ProcEntryV1],
+    sort: SortMode,
+    theme: &crate::theme::Theme,
+) {
     let mut sorted: Vec<&ProcEntryV1> = procs.iter().collect();
     match sort {
         SortMode::MemDesc => sorted.sort_by_key(|p| std::cmp::Reverse(p.mem_used)),
@@ -506,7 +691,7 @@ fn render_procs(f: &mut Frame, area: ratatui::layout::Rect, procs: &[ProcEntryV1
         .title(Span::styled(
             format!(" Processes ({}) ", procs.len()),
             Style::default()
-                .fg(Color::Cyan)
+                .fg(border_sel(theme))
                 .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
@@ -517,7 +702,7 @@ fn render_procs(f: &mut Frame, area: ratatui::layout::Rect, procs: &[ProcEntryV1
             "{:<8} {:<4} {:<10} {:>9}  {}",
             "PID", "GPU", "USER", "MEM", "COMMAND"
         ),
-        Style::default().fg(Color::DarkGray),
+        Style::default().fg(dim(theme)),
     )));
     for p in sorted.into_iter().take(inner.height as usize).skip(1) {
         lines.push(Line::from(format!(

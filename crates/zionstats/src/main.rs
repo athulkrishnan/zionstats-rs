@@ -91,7 +91,14 @@ fn run_tui_mode(cli: &Cli) -> i32 {
     let cfg =
         zionstats_core::config::load(&zionstats_core::config::config_path(cli.config.as_deref()));
     let interval = cli.interval.unwrap_or(cfg.tui_interval_s);
+    let theme_name = {
+        let cfg = zionstats_core::config::load(&zionstats_core::config::config_path(
+            cli.config.as_deref(),
+        ));
+        cfg.theme
+    };
     let tui_opts = |exit_after_ms: Option<u64>, print_ff: bool| zionstats_tui::app::TuiOpts {
+        theme_name: theme_name.clone(),
         interval_s: interval,
         readonly: cli.readonly,
         exit_after_ms,

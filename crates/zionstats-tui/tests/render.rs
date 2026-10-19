@@ -127,6 +127,19 @@ fn frame_with(gpus: usize, procs: usize) -> OwnedFrame {
     }
 }
 
+fn text_of(term: &Terminal<TestBackend>) -> String {
+    let buf = term.backend().buffer();
+    let (w, _h) = (buf.area.width, buf.area.height);
+    let mut out = String::new();
+    for line in buf.content.chunks(w as usize) {
+        for cell in line {
+            out.push_str(cell.symbol());
+        }
+        out.push('\n');
+    }
+    out
+}
+
 fn render(frame: &OwnedFrame, w: u16, h: u16) -> String {
     let backend = TestBackend::new(w, h);
     let mut term = Terminal::new(backend).unwrap();
@@ -188,4 +201,36 @@ fn render_paused(frame: &OwnedFrame, w: u16, h: u16) -> String {
         out.push('\n');
     }
     out
+}
+
+#[test]
+fn every_theme_renders_full_frame_two_sizes() {
+    // the sibling theme-QA discipline: all 16 themes must render a full
+    // frame without errors at the documented layout-test sizes
+    for theme in zionstats_tui::theme::THEMES.iter() {
+        let frame = frame_with(2, 2);
+        for (w, h) in [(90, 25), (170, 44)] {
+            let mut term = Terminal::new(TestBackend::new(w, h)).unwrap();
+            zionstats_tui::app::render_for_test_theme(
+                &mut term.get_frame(),
+                &frame,
+                false,
+                1.0,
+                false,
+                theme,
+            );
+            term.draw(|_| {}).unwrap();
+            let text = text_of(&term);
+            assert!(
+                text.contains("zionstats"),
+                "theme {} header at {w}x{h}",
+                theme.name
+            );
+            assert!(
+                text.contains("GPU 0"),
+                "theme {} cards at {w}x{h}",
+                theme.name
+            );
+        }
+    }
 }
