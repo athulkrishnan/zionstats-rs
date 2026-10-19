@@ -74,6 +74,9 @@ pub struct ControlConfig {
     pub max_sample_age_s: f32,
     pub verify_delay_s: f32,
     pub ambient_temp_fallback_c: f32,
+    /// weather older than this inhibits auto+temp actuation (Python
+    /// CoolingConfig.max_weather_age_s = 45 min)
+    pub max_weather_age_s: f32,
 }
 
 impl Default for ControlConfig {
@@ -93,6 +96,7 @@ impl Default for ControlConfig {
             max_sample_age_s: 15.0,
             verify_delay_s: 0.4,
             ambient_temp_fallback_c: 30.0,
+            max_weather_age_s: 45.0 * 60.0,
         }
     }
 }
@@ -160,8 +164,12 @@ pub struct TickInputs {
     pub util_pct: Option<f32>,
     /// age of the sample in seconds (None = no sample at all)
     pub sample_age_s: Option<f64>,
-    /// ambient override (config ambient in v0.5; weather is future work)
+    /// ambient override: live weather temp when available, else the
+    /// config fallback
     pub ambient_c: Option<f32>,
+    /// age of the weather observation in seconds (None = no weather at
+    /// all, which counts as stale)
+    pub weather_age_s: Option<f64>,
     /// periodic external plug readback (None = not this tick).  When the
     /// readback disagrees with the controller's belief, the belief is
     /// resynced and `external_resync` bypasses min-on/off on the
@@ -362,10 +370,11 @@ impl Controller {
 
         let sample_age = hot.sample_age_s.unwrap_or(f64::INFINITY);
         let stale_sample = sample_age > self.cfg.max_sample_age_s as f64;
-        // v0.5: ambient is static config => weather is never stale. The
-        // stale-weather inhibit branch is reserved for the future weather
-        // source (Python: stale weather blocks auto+temp only).
-        let stale_weather = false;
+        // Python parity: stale (or absent) weather blocks auto+temp only;
+        // the usage trigger never reads weather.
+        let stale_weather = hot
+            .weather_age_s
+            .map_or(true, |age| age > self.cfg.max_weather_age_s as f64);
 
         let (mut want, why) = match self.cfg.trigger {
             Trigger::Usage => self.decide_usage(hot.util_pct, Some(tgpu), now),
@@ -624,8 +633,74 @@ mod tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: None,
+            weather_age_s: Some(0.0),
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn stale_weather_forces_off_in_auto_temp_only() {
+        // auto + temp trigger + stale weather -> force-off of an engaged plug
+        let mut e = env(CoolingMode::Auto);
+        assert_eq!(e.ctl.tick(&hot_temp(90.0)), Command::PlugOn);
+        e.ctl.commit(true, true, "test");
+        assert!(e.ctl.state.on);
+        let mut stale = hot_temp(90.0);
+        stale.weather_age_s = Some(2701.0);
+        assert_eq!(e.ctl.tick(&stale), Command::PlugOff);
+        e.ctl.commit(false, true, "failsafe: weather data stale");
+        assert!(!e.ctl.state.on, "stale weather force-off");
+        assert_eq!(e.ctl.state.inhibited, "weather data stale");
+    }
+
+    #[test]
+    fn fresh_weather_allows_auto_engage() {
+        let mut e = env(CoolingMode::Auto);
+        assert_eq!(e.ctl.tick(&hot_temp(90.0)), Command::PlugOn);
+    }
+
+    #[test]
+    fn usage_trigger_ignores_weather() {
+        let mut e = env(CoolingMode::Auto);
+        e.ctl.cfg.trigger = Trigger::Usage;
+        let mut busy = hot_temp(90.0);
+        busy.util_pct = Some(80.0);
+        assert_eq!(e.ctl.tick(&busy), Command::PlugOn);
+        e.ctl.commit(true, true, "test");
+        let mut stale = busy;
+        stale.weather_age_s = Some(1_000_000.0);
+        e.ctl.tick(&stale);
+        assert!(e.ctl.state.on, "usage trigger never reads weather");
+        assert!(
+            e.ctl.state.inhibited.is_empty(),
+            "no weather inhibit on usage"
+        );
+    }
+
+    #[test]
+    fn manual_mode_ignores_weather() {
+        let mut e = env(CoolingMode::Manual);
+        e.ctl.tick(&hot_temp(90.0));
+        e.ctl.desired = Some(true);
+        let mut stale = hot_temp(90.0);
+        stale.weather_age_s = Some(1_000_000.0);
+        e.ctl.tick(&stale);
+        assert!(
+            e.ctl.state.on || e.ctl.state.would_on,
+            "manual is unaffected"
+        );
+    }
+
+    #[test]
+    fn absent_weather_counts_as_stale() {
+        let mut e = env(CoolingMode::Auto);
+        assert_eq!(e.ctl.tick(&hot_temp(90.0)), Command::PlugOn);
+        e.ctl.commit(true, true, "test");
+        let mut no_weather = hot_temp(90.0);
+        no_weather.weather_age_s = None;
+        assert_eq!(e.ctl.tick(&no_weather), Command::PlugOff);
+        e.ctl.commit(false, true, "failsafe: weather data stale");
+        assert_eq!(e.ctl.state.inhibited, "weather data stale");
     }
 
     #[test]
@@ -662,6 +737,7 @@ mod tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(80.0),
             readback: None,
+            weather_age_s: Some(0.0),
             ..Default::default()
         };
         assert_eq!(e.ctl.tick(&muggy), Command::Hold);
@@ -682,6 +758,7 @@ mod tests {
                 sample_age_s: Some(16.0),
                 ambient_c: Some(30.0),
                 readback: None,
+                weather_age_s: Some(0.0),
                 ..Default::default()
             };
             assert_eq!(e.ctl.tick(&stale), Command::PlugOff);
@@ -747,6 +824,7 @@ mod tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: None,
+            weather_age_s: Some(0.0),
         };
         assert_eq!(e.ctl.tick(&load), Command::PlugOn);
         e.ctl.commit(true, true, "test");
@@ -756,6 +834,7 @@ mod tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: None,
+            weather_age_s: Some(0.0),
         };
         assert_eq!(e.ctl.tick(&idle_hot), Command::Hold);
         assert!(e.ctl.state.reason.contains("hot"));
@@ -765,6 +844,7 @@ mod tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: None,
+            weather_age_s: Some(0.0),
         };
         assert_eq!(e.ctl.tick(&idle_cool), Command::Hold, "within idle_off_s");
         advance(&e, 601.0);
@@ -781,6 +861,7 @@ mod tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: None,
+            weather_age_s: Some(0.0),
         };
         assert_eq!(e.ctl.tick(&load), Command::PlugOn);
         e.ctl.commit(true, true, "test");
@@ -790,6 +871,7 @@ mod tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: None,
+            weather_age_s: Some(0.0),
         };
         assert_eq!(e.ctl.tick(&unknown), Command::Hold);
         assert!(e.ctl.state.idle_since.is_none());
@@ -854,6 +936,7 @@ mod desync_tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: None,
+            weather_age_s: Some(0.0),
         };
         assert_eq!(ctl.tick(&load), Command::PlugOn);
         ctl.commit(true, true, "test");
@@ -866,6 +949,7 @@ mod desync_tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: Some(false),
+            weather_age_s: Some(0.0),
         };
         let cmd = ctl.tick(&ext_off);
         assert!(!ctl.state.on, "belief must resync to physical OFF");
@@ -894,6 +978,7 @@ mod desync_tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: Some(true),
+            weather_age_s: Some(0.0),
         };
         ctl.tick(&ext_on);
         assert!(ctl.state.on, "belief must resync to physical ON");
@@ -916,6 +1001,7 @@ mod desync_tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: None,
+            weather_age_s: Some(0.0),
         };
         assert_eq!(ctl.tick(&no_rb), Command::PlugOn);
         ctl.commit(true, true, "test");
@@ -941,6 +1027,7 @@ mod desync_tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: None,
+            weather_age_s: Some(0.0),
         };
         assert_eq!(ctl.tick(&load), Command::PlugOn);
         ctl.commit(true, true, "test");
@@ -953,6 +1040,7 @@ mod desync_tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: None,
+            weather_age_s: Some(0.0),
         };
         assert_eq!(ctl.tick(&cool), Command::Hold, "min-on hold");
 
@@ -963,6 +1051,7 @@ mod desync_tests {
             sample_age_s: Some(0.0),
             ambient_c: Some(30.0),
             readback: Some(false),
+            weather_age_s: Some(0.0),
         };
         assert_eq!(
             ctl.tick(&cool_rb),

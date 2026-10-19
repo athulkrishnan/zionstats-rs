@@ -20,6 +20,7 @@ fn bench_tick(c: &mut Criterion) {
         sample_age_s: Some(0.0),
         ambient_c: Some(30.0),
         readback: None,
+        weather_age_s: Some(0.0),
         util_pct: Some(90.0),
     };
     group.bench_function("tick/steady_hot", |b| b.iter(|| hot.tick(&inputs)));
@@ -37,6 +38,7 @@ fn bench_tick(c: &mut Criterion) {
         sample_age_s: Some(0.0),
         ambient_c: Some(30.0),
         readback: None,
+        weather_age_s: Some(0.0),
         util_pct: Some(0.0),
     };
     group.bench_function("tick/steady_cool", |b| b.iter(|| cool.tick(&cool_inputs)));

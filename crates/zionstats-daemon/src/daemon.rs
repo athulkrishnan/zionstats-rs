@@ -263,6 +263,26 @@ async fn run_async(opts: DaemonOpts) -> i32 {
     let mut last_procs: Vec<ProcRow> = Vec::new();
     let mut tick_n: u64 = 0;
 
+    // v0.7 climate layer: shared weather cache with the Python stack
+    let mut weather_prov: Option<zionstats_core::climate::WeatherProvider> =
+        if !opts.demo && cfg.weather.enabled {
+            Some(zionstats_core::climate::WeatherProvider::new(
+                cfg.weather.lat,
+                cfg.weather.lon,
+                &cfg.weather.label,
+                cfg.weather.refresh_min,
+            ))
+        } else {
+            None
+        };
+    let mut demo_weather = if opts.demo {
+        Some(zionstats_core::climate::DemoWeather::new())
+    } else {
+        None
+    };
+    let mut current_weather: Option<zionstats_core::climate::Weather> = None;
+    let mut last_advisories: std::collections::HashSet<String> = Default::default();
+
     // v0.7 insights engine (session energy, power stats, pcie saturation)
     let mut insights_engine = zionstats_core::insights::Insights::default();
     let mut live_insights: Vec<InsightBlockV1> = Vec::new();
@@ -369,6 +389,13 @@ async fn run_async(opts: DaemonOpts) -> i32 {
             let hot = samples
                 .iter()
                 .max_by_key(|s| s.temp_gpu.map(|t| (t * 1000.0) as i64).unwrap_or(-1));
+            let ambient_c = current_weather
+                .as_ref()
+                .map(|w| w.temp_c as f32)
+                .unwrap_or(cfg.daemon.ambient_temp_c);
+            let weather_age_s = current_weather
+                .as_ref()
+                .map(|w| (now_ms() as f64 / 1000.0) - w.ts);
             let hot_inputs = hot.map(|s| TickInputs {
                 temp_c: s.temp_gpu,
                 util_pct: s.util_gpu,
@@ -381,10 +408,42 @@ async fn run_async(opts: DaemonOpts) -> i32 {
                         / 1000.0,
                 ),
                 readback: None,
-                ambient_c: Some(cfg.daemon.ambient_temp_c),
+                ambient_c: Some(ambient_c),
+                weather_age_s,
             });
             if let Some(inputs) = hot_inputs {
                 control.tick(&inputs, &shutdown_for_task);
+            }
+        }
+
+        // weather refresh (the provider rate-limits itself); advisories
+        // reach the alert ring as one-shot events (edge-triggered)
+        {
+            let w = if let Some(dw) = demo_weather.as_mut() {
+                Some(dw.refresh())
+            } else if let Some(wp) = weather_prov.as_mut() {
+                wp.refresh(false)
+            } else {
+                None
+            };
+            if let Some(w) = w {
+                let now_s = now_ms() as f64 / 1000.0;
+                let hottest = data_gpus
+                    .iter()
+                    .map(|g| g.temp_gpu)
+                    .fold(f32::NAN, f32::max);
+                let hottest = hottest.is_finite().then_some(hottest);
+                for (level, msg) in w.advisories(hottest.map(f64::from)) {
+                    if last_advisories.insert(msg.clone()) {
+                        let kind: u8 = if level == "warn" { 1 } else { 2 };
+                        control.next_event_seq += 1;
+                        control.events.push((control.next_event_seq, kind, msg));
+                        if control.events.len() > 64 {
+                            control.events.remove(0);
+                        }
+                    }
+                }
+                current_weather = Some(w);
             }
         }
 

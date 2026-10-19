@@ -44,6 +44,29 @@ pub struct PlugCfg {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct WeatherCfg {
+    pub enabled: bool,
+    pub lat: f64,
+    pub lon: f64,
+    pub label: String,
+    pub refresh_min: f64,
+}
+
+impl Default for WeatherCfg {
+    fn default() -> Self {
+        // Python WEATHER_DEFAULTS parity (neutral coords: the v0.5.0
+        // privacy fix); the Rust side never writes the config.
+        WeatherCfg {
+            enabled: true,
+            lat: 0.0,
+            lon: 0.0,
+            label: String::new(),
+            refresh_min: 20.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct Config {
     pub tui_interval_s: f64,
     pub readonly: bool,
@@ -51,6 +74,7 @@ pub struct Config {
     pub cooling: ControlConfig,
     pub plugs: Vec<PlugCfg>,
     pub expose_processes: bool,
+    pub weather: WeatherCfg,
     /// optional Bearer token gating the daemon's /metrics + /snapshot
     pub export_token: String,
 }
@@ -129,6 +153,7 @@ impl Default for Config {
             plugs: Vec::new(),
             expose_processes: true,
             export_token: String::new(),
+            weather: WeatherCfg::default(),
         }
     }
 }
@@ -277,6 +302,28 @@ pub fn load_verbose(path: &std::path::Path) -> (Config, Vec<String>) {
         }
         if let Some(v) = sec.get("token").and_then(as_string) {
             cfg.export_token = v;
+        }
+    }
+
+    // [weather] -- same key names as the Python app
+    if let Some(sec) = data.get("weather").and_then(|v| v.as_table()) {
+        let w = &mut cfg.weather;
+        if let Some(v) = sec.get("enabled").and_then(as_bool) {
+            w.enabled = v;
+        }
+        if let Some(v) = sec.get("lat").and_then(as_f64) {
+            w.lat = v;
+        }
+        if let Some(v) = sec.get("lon").and_then(as_f64) {
+            w.lon = v;
+        }
+        if let Some(v) = sec.get("label").and_then(as_string) {
+            w.label = v;
+        }
+        if let Some(v) = sec.get("refresh_min").and_then(as_f64) {
+            if v > 0.0 {
+                w.refresh_min = v;
+            }
         }
     }
 
