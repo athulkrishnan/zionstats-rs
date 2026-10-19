@@ -204,11 +204,82 @@ impl ControlStack {
             _pad1: [0; 4],
         })
     }
+
+    /// Sample every plug's meter; None readings are kept so callers can
+    /// distinguish "no meter" from "zero watts".
+    pub fn sample_power(&mut self) -> Vec<(String, Option<f64>)> {
+        self.plugs
+            .iter_mut()
+            .map(|p| (p.name().to_string(), p.power()))
+            .collect()
+    }
+}
+
+/// Rectangular session-Wh integration (same fallback math as the Python
+/// app): None readings update nothing; dt clamped so a stalled loop cannot
+/// inject phantom Wh.
+pub fn integrate_plug_energy(
+    energy: &mut std::collections::HashMap<String, f64>,
+    last: &mut std::collections::HashMap<String, f64>,
+    prev_ts: Option<f64>,
+    now_ts: f64,
+    readings: &[(String, Option<f64>)],
+) {
+    for (name, w) in readings {
+        let Some(w) = w else { continue };
+        last.insert(name.clone(), *w);
+        if let Some(prev) = prev_ts {
+            let dt = (now_ts - prev).clamp(0.0, 120.0);
+            *energy.entry(name.clone()).or_insert(0.0) += w * dt / 3600.0;
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn plug_energy_integration() {
+        let mut energy = std::collections::HashMap::new();
+        let mut last = std::collections::HashMap::new();
+        integrate_plug_energy(
+            &mut energy,
+            &mut last,
+            None,
+            100.0,
+            &[("blower".to_string(), Some(120.0))],
+        );
+        assert!(
+            energy.is_empty() && last["blower"] == 120.0,
+            "baseline only"
+        );
+        integrate_plug_energy(
+            &mut energy,
+            &mut last,
+            Some(100.0),
+            160.0,
+            &[("blower".to_string(), Some(120.0))],
+        );
+        assert!((energy["blower"] - 120.0 * 60.0 / 3600.0).abs() < 1e-9);
+        integrate_plug_energy(
+            &mut energy,
+            &mut last,
+            Some(160.0),
+            220.0,
+            &[("ghost".to_string(), None)],
+        );
+        assert!(!energy.contains_key("ghost"), "None integrates nothing");
+        // dt clamp: a stalled loop cannot inject phantom Wh
+        integrate_plug_energy(
+            &mut energy,
+            &mut last,
+            Some(0.0),
+            1000.0,
+            &[("blower".to_string(), Some(100.0))],
+        );
+        assert!((energy["blower"] - (2.0 + 100.0 * 120.0 / 3600.0)).abs() < 1e-9);
+    }
     use zionstats_core::control::actuators::MockPlug;
     use zionstats_core::control::shared_clock;
 

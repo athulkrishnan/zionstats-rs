@@ -19,6 +19,8 @@ pub struct MetricsInput<'a> {
     pub last_publish_age_ms: u64,
     pub watchdog_pings: u64,
     pub expose_processes: bool,
+    /// (plug name, live watts, session Wh) per metered plug
+    pub plugs: &'a [(String, Option<f64>, Option<f64>)],
 }
 
 fn esc(v: &str) -> String {
@@ -287,6 +289,25 @@ pub fn render_metrics(m: &MetricsInput, openmetrics: bool) -> String {
         }
     }
 
+    // ---- metered plugs (series omitted entirely when watts/wh are None)
+    for (pname, watts, wh) in m.plugs {
+        let labels = format!("plug=\"{}\"", esc(pname));
+        series!(
+            "plug_power_watts",
+            "Plug wall power (W)",
+            "gauge",
+            labels.clone(),
+            watts.map(|v| v as f32)
+        );
+        series!(
+            "plug_energy_watt_hour",
+            "Plug session energy (Wh; since zionstats start)",
+            "gauge",
+            labels,
+            wh.map(|v| v as f32)
+        );
+    }
+
     out.push((
         "daemon_uptime_seconds".to_string(),
         "Daemon uptime (s)".to_string(),
@@ -396,6 +417,32 @@ mod tests {
     }
 
     #[test]
+    fn golden_plug_series() {
+        let m = MetricsInput {
+            gpus: &[],
+            procs: &[],
+            control: None,
+            hostname: "box1",
+            version: "0.7.0",
+            uptime_s: 10,
+            last_publish_age_ms: 0,
+            watchdog_pings: 0,
+            expose_processes: false,
+            plugs: &[
+                ("blower".to_string(), Some(123.5), Some(4.2)),
+                ("ghost".to_string(), None, None),
+            ],
+        };
+        let text = render_metrics(&m, false);
+        assert!(text.contains("zionstats_plug_power_watts{plug=\"blower\"} 123.5"));
+        assert!(text.contains("zionstats_plug_energy_watt_hour{plug=\"blower\"} 4.2"));
+        assert!(
+            !text.contains("ghost"),
+            "unmetered plug omits both series (NaN rule)"
+        );
+    }
+
+    #[test]
     fn golden_families_and_escaping() {
         let g = sample("Weird \"GPU\" \\name", 42.0);
         let m = MetricsInput {
@@ -408,6 +455,7 @@ mod tests {
             last_publish_age_ms: 0,
             watchdog_pings: 0,
             expose_processes: false,
+            plugs: &[],
         };
         let text = render_metrics(&m, false);
         let lines: Vec<&str> = text.lines().collect();
@@ -454,6 +502,7 @@ mod tests {
             last_publish_age_ms: 0,
             watchdog_pings: 0,
             expose_processes: false,
+            plugs: &[],
         };
         assert!(render_metrics(&m, true).ends_with("# EOF\n"));
         assert!(!render_metrics(&m, false).ends_with("# EOF\n"));
@@ -471,6 +520,7 @@ mod tests {
             last_publish_age_ms: 0,
             watchdog_pings: 0,
             expose_processes: false,
+            plugs: &[],
         };
         let text = render_metrics(&m, false);
         assert!(text.contains("zionstats_build_info{version=\"9.9\"} 1"));

@@ -212,6 +212,7 @@ async fn run_async(opts: DaemonOpts) -> i32 {
             control: None,
             hostname: env.hostname.clone(),
             started_ms: now_ms(),
+            plugs: Vec::new(),
         }));
     {
         let live = live.clone();
@@ -260,6 +261,13 @@ async fn run_async(opts: DaemonOpts) -> i32 {
     let mut resolver = zionstats_core::cgroup::CgroupResolver::default();
     let mut last_procs: Vec<ProcRow> = Vec::new();
     let mut tick_n: u64 = 0;
+
+    // v0.7 wall-power metering state (readback-cadence sampling; the
+    // session-Wh integration matches the Python app's fallback math)
+    let mut plug_energy: std::collections::HashMap<String, f64> = Default::default();
+    let mut plug_last: std::collections::HashMap<String, f64> = Default::default();
+    let mut plug_prev_ts: Option<f64> = None;
+    let mut plug_last_sample_s = 0.0f64;
 
     // history rings kept daemon-side and flushed into SHM each tick
     let mut rings: Vec<HistoryRingV1> = (0..MAX_GPUS)
@@ -359,6 +367,24 @@ async fn run_async(opts: DaemonOpts) -> i32 {
             });
             if let Some(inputs) = hot_inputs {
                 control.tick(&inputs, &shutdown_for_task);
+            }
+        }
+
+        // wall-power sampling (30 s cadence until WI-8 unifies it with the
+        // config readback period)
+        {
+            let now_s = now_ms() as f64 / 1000.0;
+            if now_s - plug_last_sample_s >= 30.0 {
+                plug_last_sample_s = now_s;
+                let readings = control.sample_power();
+                crate::control_task::integrate_plug_energy(
+                    &mut plug_energy,
+                    &mut plug_last,
+                    plug_prev_ts,
+                    now_s,
+                    &readings,
+                );
+                plug_prev_ts = Some(now_s);
             }
         }
 
@@ -488,6 +514,21 @@ async fn run_async(opts: DaemonOpts) -> i32 {
             lf.procs = last_procs_shm.clone();
             lf.control = control.state_for_shm();
             lf.watchdog_pings = state.watchdog_pings.load(Ordering::Relaxed);
+            let names: std::collections::BTreeSet<String> = plug_energy
+                .keys()
+                .cloned()
+                .chain(plug_last.keys().cloned())
+                .collect();
+            lf.plugs = names
+                .into_iter()
+                .map(|n| {
+                    (
+                        n.clone(),
+                        plug_last.get(&n).copied(),
+                        plug_energy.get(&n).copied(),
+                    )
+                })
+                .collect();
         }
 
         state.tick_id.fetch_add(1, Ordering::Relaxed);
