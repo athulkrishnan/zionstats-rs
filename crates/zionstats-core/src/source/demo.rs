@@ -56,7 +56,7 @@ impl DemoSource {
         } else {
             20.0 + self.jitter(5.0)
         };
-        let edge = (55.0 + ((t - 8.0) * 0.9).min(15.0).max(0.0) - ((t - 95.0) * 1.4).max(0.0)
+        let edge = (55.0 + ((t - 8.0) * 0.9).clamp(0.0, 15.0) - ((t - 95.0) * 1.4).max(0.0)
             + self.jitter(0.7))
         .clamp(52.0, 70.0);
         let junc = (edge + 18.0 + 20.0 * ((t - 20.0) / 40.0).clamp(0.0, 1.0)
@@ -138,7 +138,7 @@ impl DemoSource {
             energy_mj: None,
             throttle_bits: 0,
             throttle: vec![],
-            temp_gpu: Some((45.0 + ((t - 30.0) * 0.5).min(18.0).max(0.0)) as f32),
+            temp_gpu: Some((45.0 + ((t - 30.0) * 0.5).clamp(0.0, 18.0)) as f32),
             temp_gpu_max: None,
             temp_mem: None,
             temp_slowdown: Some(85.0),

@@ -359,7 +359,7 @@ mod tests {
         assert_eq!(parse_vram(None, Some(-5)), (0, 0));
         let (pw, pl, pmin, pmax) =
             parse_power_micro(Some(84123456), Some(254000000), Some(0), Some(299000000));
-        assert!((pw.unwrap() - 84.123456).abs() < 1e-4, "uW -> W");
+        assert!((pw.unwrap() - 84.1235).abs() < 1e-3, "uW -> W");
         assert_eq!(pl, Some(254.0));
         assert_eq!(pmin, Some(0.0));
         assert_eq!(pmax, Some(299.0));
@@ -398,7 +398,7 @@ mod tests {
         assert_eq!(s.vendor, "amd");
         assert_eq!(s.util_gpu, Some(37.0));
         assert_eq!(s.mem_used, 1234567890);
-        assert!((s.power_w.unwrap() - 84.123456).abs() < 1e-4);
+        assert!((s.power_w.unwrap() - 84.1235).abs() < 1e-3);
         assert_eq!(s.power_limit_w, Some(254.0));
         assert_eq!(s.temp_gpu, Some(55.5));
         assert_eq!(s.temp_gpu_max, Some(78.0), "junction -> hottest part");

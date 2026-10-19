@@ -124,23 +124,23 @@ fn build_source(opts: &DaemonOpts, provider: &str) -> Result<ActiveSource, Strin
             #[cfg(feature = "nvml")]
             {
                 match zionstats_core::source::nvml::NvmlSource::try_new(None) {
-                    Ok(s) => return Ok(ActiveSource::Nvml(Box::new(s))),
+                    Ok(s) => Ok(ActiveSource::Nvml(Box::new(s))),
                     Err(nvml_err) => {
                         if let Ok(s) = zionstats_core::source::amd::AmdSource::try_new(
                             std::path::Path::new("/sys/class/drm"),
                             std::path::Path::new("/proc"),
                         ) {
-                            return Ok(ActiveSource::Amd(Box::new(s)));
-                        }
-                        if let Ok(s) = zionstats_core::source::intel::IntelSource::try_new(
+                            Ok(ActiveSource::Amd(Box::new(s)))
+                        } else if let Ok(s) = zionstats_core::source::intel::IntelSource::try_new(
                             std::path::Path::new("/sys/class/drm"),
                             std::path::Path::new("/proc"),
                         ) {
-                            return Ok(ActiveSource::Intel(Box::new(s)));
+                            Ok(ActiveSource::Intel(Box::new(s)))
+                        } else {
+                            Err(format!(
+                                "no live source (NVML: {nvml_err}) -- run with --demo for the synthetic rig"
+                            ))
                         }
-                        Err(format!(
-                            "no live source (NVML: {nvml_err}) -- run with --demo for the synthetic rig"
-                        ))
                     }
                 }
             }
