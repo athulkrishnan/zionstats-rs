@@ -112,7 +112,7 @@ pub fn run(opts: DaemonOpts) -> i32 {
 }
 
 async fn run_async(opts: DaemonOpts) -> i32 {
-    let cfg = config::load(&config::config_path(opts.config_path.as_deref()));
+    let mut cfg = config::load(&config::config_path(opts.config_path.as_deref()));
     let interval_s = if opts.interval_s > 0.0 {
         opts.interval_s
     } else {
@@ -153,6 +153,8 @@ async fn run_async(opts: DaemonOpts) -> i32 {
     });
 
     // ---- signal handling
+    let reload_flag = Arc::new(AtomicBool::new(false));
+    let reload_sig = reload_flag.clone();
     let stop_flag = state.clone();
     let sig_task = tokio::spawn(async move {
         let mut term =
@@ -165,7 +167,10 @@ async fn run_async(opts: DaemonOpts) -> i32 {
                     if let (Some(t), Some(h)) = (term.as_mut(), hup.as_mut()) {
                         tokio::select! {
                             _ = t.recv() => break "term",
-                            _ = h.recv() => { log::info!("SIGHUP: config reload is applied on restart in v0.5"); }
+                            _ = h.recv() => {
+                                log::info!("SIGHUP: reloading config");
+                                reload_sig.store(true, Ordering::SeqCst);
+                            }
                         }
                     } else {
                         std::future::pending::<()>().await;
@@ -313,6 +318,18 @@ async fn run_async(opts: DaemonOpts) -> i32 {
     let mut ready_sent = false;
     while !state.stop.load(Ordering::SeqCst) {
         ticker.tick().await;
+        // SIGHUP hot-reload: fans restore via the old stack's Drop, plugs
+        // stay as-is, actuation belief resets off, readback reconcile
+        // resyncs within one period.  interval/host/port need a restart.
+        if reload_flag.swap(false, Ordering::SeqCst) {
+            let path = config::config_path(opts.config_path.as_deref());
+            let (new_cfg, warnings) = config::load_verbose(&path);
+            for w in &warnings {
+                log::warn!("reload config warning: {w}");
+            }
+            cfg = new_cfg;
+            control = crate::control_task::ControlStack::reload(&opts, control, &cfg);
+        }
         let samples: Vec<Sample> = source.as_source().sample();
         let ts_ms = now_ms();
         tick_n += 1;

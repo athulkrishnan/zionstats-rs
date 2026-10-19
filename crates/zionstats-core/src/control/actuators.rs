@@ -24,6 +24,12 @@ pub trait FanActuator: Send {
     /// Read back the current PWM percent; Ok(None) = unreadable (counts as
     /// verify success in the ported loop, matching Python's `None` readback).
     fn readback_pct(&mut self, gpu: u32, fan: u32) -> Result<Option<u32>, ActuatorError>;
+    /// Best-effort restore of every managed GPU to driver control.  Runs
+    /// on ControlStack drop (reload + process exit) so manual PWM never
+    /// outlives the stack that commanded it.
+    fn restore_all_default(&mut self) -> Result<(), ActuatorError> {
+        self.restore_default(0)
+    }
 }
 
 #[derive(Debug, thiserror::Error)]

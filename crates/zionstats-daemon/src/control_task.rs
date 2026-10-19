@@ -215,6 +215,36 @@ impl ControlStack {
     }
 }
 
+impl Drop for ControlStack {
+    fn drop(&mut self) {
+        // fans ALWAYS return to driver control (a reload must never leave
+        // manual PWM behind); the plug shutdown policy is a process-exit
+        // concern handled by the SIGTERM path, never a reload concern.
+        if let Some(fans) = self.fans.as_mut() {
+            let _ = fans.restore_all_default();
+        }
+    }
+}
+
+impl ControlStack {
+    /// SIGHUP reload: drop the old stack (fan restore via Drop), rebuild
+    /// from the fresh config.  Actuation state resets to off by
+    /// construction; the periodic readback reconcile re-syncs belief from
+    /// reality within one readback period.
+    pub fn reload(
+        opts: &DaemonOpts,
+        old: ControlStack,
+        cfg: &zionstats_core::config::Config,
+    ) -> Self {
+        drop(old);
+        let (stack, warnings) = ControlStack::build(opts, cfg);
+        for w in warnings {
+            log::info!("reload: {w}");
+        }
+        stack
+    }
+}
+
 /// Rectangular session-Wh integration (same fallback math as the Python
 /// app): None readings update nothing; dt clamped so a stalled loop cannot
 /// inject phantom Wh.
@@ -293,6 +323,108 @@ mod tests {
         let (stack, warnings) = ControlStack::build(&opts, &cfg);
         assert!(stack.controller.is_none() && stack.plugs.is_empty() && stack.fans.is_none());
         assert!(!warnings.is_empty());
+    }
+
+    #[test]
+    fn reload_restores_fans_once_keeps_plugs_resets_state() {
+        use std::sync::{Arc, Mutex};
+
+        use zionstats_core::control::actuators::{ActuatorError, FanActuator, FanCaps, PlugError};
+
+        struct RecordingFan(Arc<std::sync::atomic::AtomicU32>);
+        impl FanActuator for RecordingFan {
+            fn capabilities(&self) -> FanCaps {
+                FanCaps {
+                    num_fans: 1,
+                    writable: true,
+                }
+            }
+            fn set_pwm(&mut self, _g: u32, _f: u32, _p: u32) -> Result<(), ActuatorError> {
+                Ok(())
+            }
+            fn restore_default(&mut self, _g: u32) -> Result<(), ActuatorError> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            }
+            fn readback_pct(&mut self, _g: u32, _f: u32) -> Result<Option<u32>, ActuatorError> {
+                Ok(None)
+            }
+        }
+
+        #[derive(Default)]
+        struct RecordingPlug {
+            log: Arc<Mutex<Vec<&'static str>>>,
+        }
+        impl Plug for RecordingPlug {
+            fn name(&self) -> &str {
+                "rec"
+            }
+            fn on(&mut self) -> Result<(), PlugError> {
+                self.log.lock().unwrap().push("on");
+                Ok(())
+            }
+            fn off(&mut self) -> Result<(), PlugError> {
+                self.log.lock().unwrap().push("off");
+                Ok(())
+            }
+            fn status(&mut self) -> Option<bool> {
+                None
+            }
+        }
+
+        use zionstats_core::control::{Controller, Trigger};
+        let restores = Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let plug_log = Arc::new(Mutex::new(Vec::new()));
+        let (_, f) = shared_clock(1000.0);
+        let mut stack = ControlStack::default();
+        stack.plugs.push(Box::new(RecordingPlug {
+            log: plug_log.clone(),
+        }));
+        stack.fans = Some(Box::new(RecordingFan(restores.clone())));
+        stack.controller = Some(Controller::new(
+            ControlConfig {
+                mode: CoolingMode::Auto,
+                trigger: Trigger::Usage,
+                ..Default::default()
+            },
+            f,
+        ));
+        let shutdown = AtomicBool::new(false);
+        let load = TickInputs {
+            temp_c: Some(50.0),
+            util_pct: Some(40.0),
+            sample_age_s: Some(0.0),
+            ambient_c: Some(30.0),
+            readback: None,
+            weather_age_s: Some(0.0),
+        };
+        assert!(stack.tick(&load, &shutdown).is_some());
+        assert!(stack.controller.as_ref().unwrap().state.on);
+
+        // SIGHUP reload into a config whose cooling ships OFF: the old
+        // stack's Drop restores fans EXACTLY once, the plug hears no
+        // command (the shutdown policy is process-exit only), and the new
+        // controller starts disengaged.
+        let cfg = zionstats_core::config::Config::default();
+        let stack = ControlStack::reload(&DaemonOpts::default(), stack, &cfg);
+        assert_eq!(
+            restores.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "fan restore on drop, exactly once"
+        );
+        assert_eq!(
+            plug_log.lock().unwrap().as_slice(),
+            ["on"],
+            "reload never commands plugs (only the engage dispatched)"
+        );
+        assert!(
+            stack
+                .controller
+                .as_ref()
+                .map(|c| !c.state.on)
+                .unwrap_or(true),
+            "new controller starts off"
+        );
     }
 
     #[test]

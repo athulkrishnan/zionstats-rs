@@ -61,6 +61,10 @@ impl NvmlFan {
 
 #[cfg(feature = "nvml")]
 impl FanActuator for NvmlFan {
+    fn restore_all_default(&mut self) -> Result<(), ActuatorError> {
+        NvmlFan::restore_all_default(self).map_err(ActuatorError::Failed)
+    }
+
     fn capabilities(&self) -> FanCaps {
         FanCaps {
             num_fans: self.fans_per_gpu.iter().sum(),
