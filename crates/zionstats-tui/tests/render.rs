@@ -90,6 +90,7 @@ fn frame_with(gpus: usize, procs: usize) -> OwnedFrame {
         },
         gpus: g,
         procs: p,
+        insights: Vec::new(),
         control: ControlStateV1 {
             last_change_ms: 0,
             on_since_ms: 0,

@@ -26,6 +26,7 @@ pub struct LiveFrame {
     pub started_ms: u64,
     /// (plug name, live watts, session Wh) per metered plug
     pub plugs: Vec<(String, Option<f64>, Option<f64>)>,
+    pub insights: Vec<zionstats_core::shm::layout::InsightBlockV1>,
 }
 
 pub type SharedFrame = std::sync::Mutex<LiveFrame>;
@@ -111,6 +112,7 @@ fn route<B>(
                 last_publish_age_ms: 0,
                 expose_processes,
                 plugs: &lf.plugs,
+                insights: &lf.insights,
             };
             let body = render_metrics(&input, openmetrics);
             Response::builder()
@@ -216,6 +218,7 @@ mod tests {
             hostname: "test-host".into(),
             started_ms: zionstats_core::shm::layout::now_ms(),
             plugs: Vec::new(),
+            insights: Vec::new(),
         }))
     }
 

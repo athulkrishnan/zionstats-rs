@@ -38,7 +38,10 @@ pub const ALERTS_OFF: usize = RINGS_OFF + MAX_GPUS * RING_SIZE;
 pub const ALERT_SIZE: usize = 144;
 pub const ENV_OFF: usize = ALERTS_OFF + MAX_ALERTS * ALERT_SIZE;
 pub const ENV_SIZE: usize = 256;
-pub const TOTAL_SIZE: usize = 262_144; // 256 KiB (payload ~165 KiB, rest reserved)
+pub const INSIGHTS_OFF: usize = ENV_OFF + ENV_SIZE;
+pub const INSIGHT_STRIDE: usize = 64;
+pub const INSIGHTS_SIZE: usize = MAX_GPUS * INSIGHT_STRIDE;
+pub const TOTAL_SIZE: usize = 262_144; // 256 KiB (payload ~166 KiB, rest reserved)
 
 /// History-ring metric slot order (fixed discriminants; layout v2 may
 /// extend but must not reorder).
@@ -214,6 +217,22 @@ pub struct EnvBlockV1 {
     pub _pad: [u8; 64],
 }
 
+/// Per-GPU derived metrics (layout v2 tail): the daemon's insight engine
+/// writes these each tick; NaN = unavailable.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, FromBytes, Immutable, IntoBytes, KnownLayout)]
+pub struct InsightBlockV1 {
+    pub session_wh: f64,
+    pub avg_w: f32,
+    pub peak_w: f32,
+    pub idle_leak_w: f32,
+    pub clock_deficit_mhz: u32,
+    pub pcie_sat: f32,
+    pub thermal_rate_c_per_min: f32,
+    pub vendor: u8,
+    pub _pad: [u8; 31],
+}
+
 const _: () = assert!(size_of::<ShmHeaderV1>() == HDR_SIZE);
 const _: () = assert!(size_of::<GpuSampleV1>() == GPU_STRIDE);
 const _: () = assert!(size_of::<ProcEntryV1>() == PROC_STRIDE);
@@ -221,7 +240,9 @@ const _: () = assert!(size_of::<ControlStateV1>() == CTRL_SIZE);
 const _: () = assert!(size_of::<HistoryRingV1>() == RING_SIZE);
 const _: () = assert!(size_of::<AlertV1>() == ALERT_SIZE);
 const _: () = assert!(size_of::<EnvBlockV1>() == ENV_SIZE);
+const _: () = assert!(size_of::<InsightBlockV1>() == INSIGHT_STRIDE);
 const _: () = assert!(ENV_OFF + ENV_SIZE <= TOTAL_SIZE);
+const _: () = assert!(INSIGHTS_OFF + INSIGHTS_SIZE <= TOTAL_SIZE);
 const _: () = assert!(TOTAL_SIZE == 262_144);
 
 /// NUL-padded copy helper (truncate silently; entries are sized generously).

@@ -289,7 +289,13 @@ fn ui(
         )
         .split(cards);
         for (i, g) in frame.gpus.iter().enumerate() {
-            render_gpu_card(f, card_chunks[i], g, frame.rings.get(i));
+            render_gpu_card(
+                f,
+                card_chunks[i],
+                g,
+                frame.rings.get(i),
+                frame.insights.get(i),
+            );
         }
         render_procs(f, procs, &frame.procs, sort);
         if !alerts.is_empty() {
@@ -335,6 +341,7 @@ fn render_gpu_card(
     area: ratatui::layout::Rect,
     g: &GpuSampleV1,
     ring: Option<&zionstats_core::shm::layout::HistoryRingV1>,
+    insight: Option<&zionstats_core::shm::layout::InsightBlockV1>,
 ) {
     let name = get_fixed(&g.name);
     let pstate_str = if g.pstate < 0 {
@@ -342,7 +349,14 @@ fn render_gpu_card(
     } else {
         format!("P{ }", g.pstate).replace(" ", "")
     };
-    let title = format!(" GPU {} ─ {} ─ {} ", g.index, name, pstate_str);
+    let energy_str = insight
+        .filter(|b| b.session_wh > 0.0)
+        .map(|b| format!(" ─ E {:.1}Wh", b.session_wh))
+        .unwrap_or_default();
+    let title = format!(
+        " GPU {} ─ {} ─ {}{} ",
+        g.index, name, pstate_str, energy_str
+    );
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(symbols::border::ROUNDED)

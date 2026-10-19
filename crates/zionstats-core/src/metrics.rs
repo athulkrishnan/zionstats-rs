@@ -3,7 +3,7 @@
 //! `zionstats_process_*`) so the shipped Grafana dashboard keeps working;
 //! NaN/None fields omit the series entirely (never emitted).
 
-use crate::shm::layout::{ControlStateV1, GpuSampleV1, ProcEntryV1, GPU_FLAG_ECC};
+use crate::shm::layout::{ControlStateV1, GpuSampleV1, InsightBlockV1, ProcEntryV1, GPU_FLAG_ECC};
 
 pub const CONTENT_TYPE_PLAIN: &str = "text/plain; version=0.0.4; charset=utf-8";
 pub const CONTENT_TYPE_OPENMETRICS: &str =
@@ -21,6 +21,8 @@ pub struct MetricsInput<'a> {
     pub expose_processes: bool,
     /// (plug name, live watts, session Wh) per metered plug
     pub plugs: &'a [(String, Option<f64>, Option<f64>)],
+    /// per-GPU derived metrics (empty when the engine has not run yet)
+    pub insights: &'a [InsightBlockV1],
 }
 
 /// v2 layout vendor byte -> exporter label (matches the Python
@@ -318,6 +320,44 @@ pub fn render_metrics(m: &MetricsInput, openmetrics: bool) -> String {
         }
     }
 
+    // ---- per-GPU insights (Python-parity families)
+    for (i, b) in m.insights.iter().enumerate() {
+        let labels = format!(
+            "gpu=\"{}\",Hostname=\"{}\",vendor=\"{}\"",
+            i,
+            esc(m.hostname),
+            vendor_name(b.vendor)
+        );
+        series!(
+            "gpu_session_energy_watt_hour",
+            "Session energy (Wh; since zionstats start or last reset)",
+            "gauge",
+            labels.clone(),
+            (b.session_wh > 0.0).then_some(b.session_wh as f32)
+        );
+        series!(
+            "gpu_power_avg_watts",
+            "Session average power (W)",
+            "gauge",
+            labels.clone(),
+            Some(b.avg_w)
+        );
+        series!(
+            "gpu_power_peak_watts",
+            "Session peak power (W)",
+            "gauge",
+            labels.clone(),
+            Some(b.peak_w)
+        );
+        series!(
+            "gpu_pcie_saturation_ratio",
+            "Measured PCIe throughput / theoretical link (0..1)",
+            "gauge",
+            labels,
+            Some(b.pcie_sat)
+        );
+    }
+
     // ---- metered plugs (series omitted entirely when watts/wh are None)
     for (pname, watts, wh) in m.plugs {
         let labels = format!("plug=\"{}\"", esc(pname));
@@ -465,6 +505,7 @@ mod tests {
                 ("blower".to_string(), Some(123.5), Some(4.2)),
                 ("ghost".to_string(), None, None),
             ],
+            insights: &[],
         };
         let text = render_metrics(&m, false);
         assert!(text.contains("zionstats_plug_power_watts{plug=\"blower\"} 123.5"));
@@ -473,6 +514,40 @@ mod tests {
             !text.contains("ghost"),
             "unmetered plug omits both series (NaN rule)"
         );
+    }
+
+    #[test]
+    fn golden_insight_series() {
+        let b = InsightBlockV1 {
+            session_wh: 12.5,
+            avg_w: 180.0,
+            peak_w: 320.0,
+            idle_leak_w: 18.0,
+            clock_deficit_mhz: 220,
+            pcie_sat: 0.42,
+            thermal_rate_c_per_min: 1.5,
+            vendor: 0,
+            _pad: [0; 31],
+        };
+        let m = MetricsInput {
+            gpus: &[],
+            procs: &[],
+            control: None,
+            hostname: "box1",
+            version: "0.7.0",
+            uptime_s: 10,
+            last_publish_age_ms: 0,
+            watchdog_pings: 0,
+            expose_processes: false,
+            plugs: &[],
+            insights: &[b],
+        };
+        let text = render_metrics(&m, false);
+        assert!(text.contains("zionstats_gpu_session_energy_watt_hour{gpu=\"0\",Hostname=\"box1\",vendor=\"nvidia\"} 12.5"));
+        assert!(text.contains(
+            "zionstats_gpu_power_peak_watts{gpu=\"0\",Hostname=\"box1\",vendor=\"nvidia\"} 320"
+        ));
+        assert!(text.contains("zionstats_gpu_pcie_saturation_ratio"));
     }
 
     #[test]
@@ -489,6 +564,7 @@ mod tests {
             watchdog_pings: 0,
             expose_processes: false,
             plugs: &[],
+            insights: &[],
         };
         let text = render_metrics(&m, false);
         let lines: Vec<&str> = text.lines().collect();
@@ -536,6 +612,7 @@ mod tests {
             watchdog_pings: 0,
             expose_processes: false,
             plugs: &[],
+            insights: &[],
         };
         assert!(render_metrics(&m, true).ends_with("# EOF\n"));
         assert!(!render_metrics(&m, false).ends_with("# EOF\n"));
@@ -554,6 +631,7 @@ mod tests {
             watchdog_pings: 0,
             expose_processes: false,
             plugs: &[],
+            insights: &[],
         };
         let text = render_metrics(&m, false);
         assert!(text.contains("zionstats_build_info{version=\"9.9\"} 1"));

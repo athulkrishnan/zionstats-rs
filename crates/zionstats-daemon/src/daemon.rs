@@ -11,10 +11,10 @@ use zionstats_core::config;
 use zionstats_core::control::CoolingMode;
 use zionstats_core::control::TickInputs;
 use zionstats_core::shm::layout::{
-    now_ms, put_fixed, ControlStateV1, EnvBlockV1, GpuSampleV1, HistoryRingV1, ProcEntryV1,
-    GPU_FLAG_CLOCKS, GPU_FLAG_ECC, GPU_FLAG_ENERGY, GPU_FLAG_FAN, GPU_FLAG_PCIE, GPU_FLAG_POWER,
-    GPU_FLAG_TEMP, GPU_FLAG_VERDICT, MAX_ALERTS, MAX_GPUS, MAX_PROCS, RING_LEN, RING_MEM_FRAC,
-    RING_POWER_W, RING_SM_CLOCK, RING_TEMP_GPU, RING_UTIL_GPU, RING_UTIL_MEM,
+    now_ms, put_fixed, ControlStateV1, EnvBlockV1, GpuSampleV1, HistoryRingV1, InsightBlockV1,
+    ProcEntryV1, GPU_FLAG_CLOCKS, GPU_FLAG_ECC, GPU_FLAG_ENERGY, GPU_FLAG_FAN, GPU_FLAG_PCIE,
+    GPU_FLAG_POWER, GPU_FLAG_TEMP, GPU_FLAG_VERDICT, MAX_ALERTS, MAX_GPUS, MAX_PROCS, RING_LEN,
+    RING_MEM_FRAC, RING_POWER_W, RING_SM_CLOCK, RING_TEMP_GPU, RING_UTIL_GPU, RING_UTIL_MEM,
 };
 use zionstats_core::shm::ShmWriter;
 use zionstats_core::source::demo::DemoSource;
@@ -213,6 +213,7 @@ async fn run_async(opts: DaemonOpts) -> i32 {
             hostname: env.hostname.clone(),
             started_ms: now_ms(),
             plugs: Vec::new(),
+            insights: Vec::new(),
         }));
     {
         let live = live.clone();
@@ -262,6 +263,10 @@ async fn run_async(opts: DaemonOpts) -> i32 {
     let mut last_procs: Vec<ProcRow> = Vec::new();
     let mut tick_n: u64 = 0;
 
+    // v0.7 insights engine (session energy, power stats, pcie saturation)
+    let mut insights_engine = zionstats_core::insights::Insights::default();
+    let mut live_insights: Vec<InsightBlockV1> = Vec::new();
+
     // v0.7 wall-power metering state (readback-cadence sampling; the
     // session-Wh integration matches the Python app's fallback math)
     let mut plug_energy: std::collections::HashMap<String, f64> = Default::default();
@@ -292,10 +297,23 @@ async fn run_async(opts: DaemonOpts) -> i32 {
         let ts_ms = now_ms();
         tick_n += 1;
         let mut data_gpus: Vec<GpuSampleV1> = Vec::with_capacity(samples.len());
+        live_insights.clear();
         for s in &samples {
+            let ins = insights_engine.update(s);
             let mut g = zeroed_gpu();
             fill_gpu(&mut g, s, ts_ms);
             data_gpus.push(g);
+            live_insights.push(InsightBlockV1 {
+                session_wh: ins.session_wh,
+                avg_w: ins.avg_w.unwrap_or(f32::NAN),
+                peak_w: ins.peak_w.unwrap_or(f32::NAN),
+                idle_leak_w: ins.idle_leak_w.unwrap_or(f32::NAN),
+                clock_deficit_mhz: ins.clock_deficit_mhz,
+                pcie_sat: ins.pcie_sat,
+                thermal_rate_c_per_min: ins.thermal_rate_c_per_min,
+                vendor: vendor_byte(&s.vendor),
+                _pad: [0; 31],
+            });
         }
         let last_procs_shm: Vec<ProcEntryV1> = last_procs
             .iter()
@@ -419,10 +437,17 @@ async fn run_async(opts: DaemonOpts) -> i32 {
         }
 
         writer.publish(interval_ms, |view| {
-            let header = view.header();
-            header.gpu_count = samples.len().min(MAX_GPUS) as u32;
-            header.proc_count = last_procs.len().min(MAX_PROCS) as u32;
-            header.flags = if readonly { 1 } else { 0 } | if opts.demo { 2 } else { 0 };
+            {
+                let header = view.header();
+                header.gpu_count = samples.len().min(MAX_GPUS) as u32;
+                header.proc_count = last_procs.len().min(MAX_PROCS) as u32;
+                header.flags = if readonly { 1 } else { 0 } | if opts.demo { 2 } else { 0 };
+            }
+            for (i, b) in live_insights.iter().enumerate() {
+                if let Some(slot) = view.insight_mut(i) {
+                    *slot = *b;
+                }
+            }
 
             {
                 let e = view.env_mut();
@@ -529,6 +554,7 @@ async fn run_async(opts: DaemonOpts) -> i32 {
                     )
                 })
                 .collect();
+            lf.insights = live_insights.clone();
         }
 
         state.tick_id.fetch_add(1, Ordering::Relaxed);

@@ -256,6 +256,14 @@ impl ShmPayloadView<'_> {
         AlertV1::mut_from_bytes(&mut self.map[off..off + ALERT_SIZE]).ok()
     }
 
+    pub fn insight_mut(&mut self, idx: usize) -> Option<&mut InsightBlockV1> {
+        InsightBlockV1::mut_from_bytes(
+            &mut self.map
+                [INSIGHTS_OFF + idx * INSIGHT_STRIDE..INSIGHTS_OFF + (idx + 1) * INSIGHT_STRIDE],
+        )
+        .ok()
+    }
+
     pub fn env_mut(&mut self) -> &mut EnvBlockV1 {
         EnvBlockV1::mut_from_bytes(&mut self.map[ENV_OFF..ENV_OFF + ENV_SIZE])
             .expect("env region size is compile-time checked")
@@ -396,6 +404,13 @@ impl ShmReader {
         alerts.sort_by_key(|a| a.seq);
         let env = *EnvBlockV1::ref_from_bytes(&self.map[ENV_OFF..ENV_OFF + ENV_SIZE])
             .expect("env size checked");
+        let mut insights = Vec::with_capacity(gpu_count);
+        for i in 0..gpu_count {
+            let off = INSIGHTS_OFF + i * INSIGHT_STRIDE;
+            if let Ok(b) = InsightBlockV1::ref_from_bytes(&self.map[off..off + INSIGHT_STRIDE]) {
+                insights.push(*b);
+            }
+        }
         OwnedFrame {
             header: h,
             gpus,
@@ -404,6 +419,7 @@ impl ShmReader {
             rings,
             alerts,
             env,
+            insights,
             stale: false,
         }
     }
@@ -418,6 +434,7 @@ pub struct OwnedFrame {
     pub rings: Vec<HistoryRingV1>,
     pub alerts: Vec<AlertV1>,
     pub env: EnvBlockV1,
+    pub insights: Vec<InsightBlockV1>,
     pub stale: bool,
 }
 
@@ -493,15 +510,20 @@ mod tests {
         };
 
         let stop = Arc::new(AtomicU64::new(0));
+        // start gate: every reader is attached before the writer begins,
+        // so a loaded CI box cannot starve readers into zero checks
+        let barrier = Arc::new(std::sync::Barrier::new(5));
         let mut readers = Vec::new();
         for _ in 0..4 {
             let stop = stop.clone();
             let path = path.clone();
+            let barrier = barrier.clone();
             readers.push(std::thread::spawn(move || {
                 let file = OpenOptions::new().read(true).open(&path).unwrap();
                 let map = unsafe { memmap2::Mmap::map(&file).unwrap() };
                 let reader = ShmReader { map, path };
                 let mut checks = 0u64;
+                barrier.wait();
                 while stop.load(AtomicOrdering::Relaxed) == 0 {
                     let frame = reader.read().unwrap();
                     // stale frames are the documented bounded-retry fallback
@@ -522,6 +544,7 @@ mod tests {
             }));
         }
 
+        barrier.wait();
         let mut tick: u64 = 0;
         for _ in 0..50_000 {
             tick += 1;
