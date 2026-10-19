@@ -11,7 +11,8 @@
 //! keep `None`.
 
 use nvml_wrapper_sys::bindings::{
-    nvmlReturn_enum_NVML_ERROR_INSUFFICIENT_SIZE, nvmlReturn_enum_NVML_SUCCESS, NvmlLib,
+    nvmlReturn_enum_NVML_ERROR_INSUFFICIENT_SIZE, nvmlReturn_enum_NVML_ERROR_NOT_FOUND,
+    nvmlReturn_enum_NVML_SUCCESS, NvmlLib,
 };
 
 use crate::types::GpuProc;
@@ -63,15 +64,17 @@ impl PmonSource for NvmlPmonFfi {
         let get_process_util = self.syms.nvmlDeviceGetProcessUtilization.as_ref().ok()?;
         unsafe {
             let mut count: libc::c_uint = 0;
-            // two-call pattern: an empty buffer returns the needed count
+            // two-call pattern.  Driver behavior varies on the sizing
+            // call: INSUFFICIENT_SIZE with the needed count is the
+            // documented path, but several drivers return SUCCESS (count
+            // untouched at 0) or another rc when there are simply no
+            // samples -- an error-with-zero-count means "no clients",
+            // not a failure.
             let rc = get_process_util(device, std::ptr::null_mut(), &mut count, last_seen_ms);
-            if rc == nvmlReturn_enum_NVML_SUCCESS && count == 0 {
+            if rc != nvmlReturn_enum_NVML_ERROR_INSUFFICIENT_SIZE || count == 0 {
                 return Some(Vec::new());
             }
-            if rc != nvmlReturn_enum_NVML_ERROR_INSUFFICIENT_SIZE {
-                return None;
-            }
-            if count == 0 || count > 4096 {
+            if count > 4096 {
                 return Some(Vec::new());
             }
             let mut buf: Vec<nvml_wrapper_sys::bindings::nvmlProcessUtilizationSample_t> = vec![
@@ -87,6 +90,12 @@ impl PmonSource for NvmlPmonFfi {
                 ];
             let mut got = count;
             let rc = get_process_util(device, buf.as_mut_ptr(), &mut got, last_seen_ms);
+            if rc == nvmlReturn_enum_NVML_ERROR_NOT_FOUND {
+                // verified live on a 580.159 driver: NOT_FOUND means "no
+                // utilization samples in the window" (idle GPU), not a
+                // missing symbol -- same as the Python client's empty list
+                return Some(Vec::new());
+            }
             if rc != nvmlReturn_enum_NVML_SUCCESS {
                 return None;
             }

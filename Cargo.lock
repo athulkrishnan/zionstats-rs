@@ -2317,6 +2317,7 @@ dependencies = [
  "base64",
  "criterion",
  "ecb",
+ "env_logger",
  "flate2",
  "libc",
  "log",

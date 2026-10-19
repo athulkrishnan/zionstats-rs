@@ -30,6 +30,7 @@ libc.workspace = true
 [dev-dependencies]
 tempfile.workspace = true
 criterion.workspace = true
+env_logger.workspace = true
 
 [[bench]]
 name = "shm"
