@@ -61,6 +61,8 @@ jobs:
                   z.write(f"target/{target}/release/{b}", b)
               for f in ("README.md", "LICENSE", "NOTICE", "CHANGELOG.md"):
                   z.write(f, f)
+              for m in ("zionstats.1", "zionstatsd.1", "zionstats-tui.1"):
+                  z.write(f"docs/man/{m}", f"man/{m}")
         env:
           matrix_target: ${{ matrix.target }}
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

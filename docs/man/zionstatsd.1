@@ -1,0 +1,37 @@
+.TH ZIONSTATSD 1 "2026-10-19" "zionstats 0.7.0" "User Commands"
+.SH NAME
+zionstatsd \- always-on GPU telemetry daemon publishing shared-memory frames
+.SH SYNOPSIS
+.B zionstatsd
+.RI [ options ]
+.SH DESCRIPTION
+Polls GPU telemetry, publishes 256 KiB frames to
+.IR /dev/shm/zionstats-<uid>
+(mode 0600, seqlock + flock single-writer), serves
+.B /metrics
+(Prometheus/OpenMetrics), /snapshot, and /healthz on the metrics socket,
+and drives the fail-safe cooling controller.  SIGHUP reloads the config:
+fans restore to driver control, plugs are left as-is, and the actuation
+belief re-syncs within one readback period.  SIGTERM applies the
+configured plug shutdown policy and restores fan control.
+.SH OPTIONS
+Same options as
+.BR zionstats (1):
+.BR \-i / \-\-interval ,
+.B \-\-host ,
+.B \-\-port ,
+.B \-\-readonly ,
+.B \-\-demo ,
+.BI \-\-provider ,
+.BI \-\-record ,
+.BI \-\-replay ,
+.BI \-\-config ,
+.BI \-\-mode ,
+.B \-\-check\-config .
+.SH METRICS
+Default bind 127.0.0.1:9400.  Bearer auth via the [export] token config
+key (config only, never CLI).  dcgm-exporter also defaults to :9400 --
+set [daemon] port for mixed stacks.
+.SH "SEE ALSO"
+.BR zionstats (1),
+.BR zionstats-tui (1)

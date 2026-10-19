@@ -1,0 +1,29 @@
+.TH ZIONSTATS-TUI 1 "2026-10-19" "zionstats 0.7.0" "User Commands"
+.SH NAME
+zionstats-tui \- SHM-backed terminal UI (never initializes NVML)
+.SH SYNOPSIS
+.B zionstats-tui
+.RI [ options ]
+.SH DESCRIPTION
+Attaches to the daemon's shared-memory frames and renders the dashboard:
+LIVE/STALE/DAEMON-DOWN badges, GPU gauge cards, process table, control
+row, alerts.  The binary never links or initializes NVML.
+.SH OPTIONS
+.TP
+.BI \-i " SECONDS" ", " \-\-interval " SECONDS"
+Refresh interval (floor 0.25).
+.TP
+.B \-\-readonly
+Hide actuation keys.
+.TP
+.BI \-\-config " PATH"
+Config path.
+.TP
+.B \-\-theme " NAME"
+UI theme (16 built-ins; garbage falls back to predawn).
+.SH KEYS
+q quit; space/p pause; +/- rate; s cycle sort; t theme picker; o toggle
+blower (when a controller is active and not readonly).
+.SH "SEE ALSO"
+.BR zionstats (1),
+.BR zionstatsd (1)

@@ -1,0 +1,66 @@
+.TH ZIONSTATS 1 "2026-10-19" "zionstats 0.7.0" "User Commands"
+.SH NAME
+zionstats \- btop-grade GPU observatory (SHM-backed TUI + headless daemon)
+.SH SYNOPSIS
+.B zionstats
+.RI [ options ]
+.SH DESCRIPTION
+Runs the terminal UI by default, attaching to the shared-memory frames
+published by
+.BR zionstatsd (1).
+With
+.B \-\-daemon
+it runs the headless daemon instead.  See
+.BR zionstatsd (1)
+for daemon-only options and the shared config file.
+.SH OPTIONS
+.TP
+.B \-\-daemon
+Run the headless daemon instead of the TUI.
+.TP
+.BR \-i ", " \-\-interval " " \fISECONDS\fR
+Sampling/refresh interval (floor 0.25).
+.TP
+.B \-\-demo
+Synthetic four-GPU source (two NVIDIA, one AMD, one Intel); no hardware.
+.TP
+.B \-\-readonly
+Forbid all actuation (structurally builds none).
+.TP
+.BI \-\-provider " AUTO|NVIDIA|AMD|INTEL"
+GPU data source (default auto: NVML, then a drm vendor scan).
+.TP
+.BI \-\-replay " FILE"
+Replay a recorded trace in the TUI (embedded replay daemon).
+.TP
+.BI \-\-record " FILE"
+[daemon] record one Python-compatible frame per tick (ndjson or .gz).
+.TP
+.BI \-\-host " HOST" ", " \-\-port " PORT"
+[daemon] metrics bind address (default 127.0.0.1:9400).
+.TP
+.BI \-\-config " PATH"
+Config path (default $ZION_CONFIG or ~/.config/zionstats/config.toml).
+.TP
+.BI \-\-mode " OFF|DRY_RUN|AUTO|MANUAL"
+[daemon] cooling mode override.
+.TP
+.B \-\-check\-config
+[daemon] print the resolved configuration and exit (never touches NVML).
+.TP
+.B \-\-completions " SHELL"
+Emit shell completions and exit.
+.SH CONFIGURATION
+The shared config lives at
+.I ~/.config/zionstats/config.toml
+(override with $ZION_CONFIG).  Keys are documented in the project README;
+themes, plugs, cooling, weather, and export sections are shared with the
+Python sibling.
+.SH SECURITY
+The metrics listener binds loopback by default.  Optionally set
+[export] token (config only, never CLI) to require a Bearer token on
+/metrics and /snapshot.  Plug control is LAN-local plaintext; see
+SECURITY.md in the project tree.
+.SH "SEE ALSO"
+.BR zionstatsd (1),
+.BR zionstats-tui (1)

@@ -35,3 +35,16 @@ EOF
     echo "unit installed: systemctl enable --now zionstatsd"
 fi
 echo "installed to $PREFIX/bin"
+
+# man pages
+if [ -d "$(dirname "$0")/../docs/man" ] || [ -d "docs/man" ]; then
+    MAN_SRC="$(dirname "$0")/../docs/man"
+    [ -d "$MAN_SRC" ] || MAN_SRC="docs/man"
+    if [ -d "$MAN_SRC" ]; then
+        echo "installing man pages to /usr/local/share/man/man1 (sudo may prompt)"
+        sudo install -d /usr/local/share/man/man1
+        for page in "$MAN_SRC"/*.1; do
+            sudo install -m 644 "$page" /usr/local/share/man/man1/
+        done
+    fi
+fi
