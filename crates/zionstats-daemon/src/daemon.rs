@@ -427,7 +427,6 @@ async fn run_async(opts: DaemonOpts) -> i32 {
                 None
             };
             if let Some(w) = w {
-                let now_s = now_ms() as f64 / 1000.0;
                 let hottest = data_gpus
                     .iter()
                     .map(|g| g.temp_gpu)
