@@ -77,6 +77,27 @@ impl Plug for HaPlug {
         let v: serde_json::Value = serde_json::from_str(&body).ok()?;
         Some(v.get("state")?.as_str()? == "on")
     }
+
+    /// Entity attributes `power` or `current_power_w` (either naming);
+    /// None when the entity exposes no wattage.
+    fn power(&mut self) -> Option<f64> {
+        let url = format!("{}/api/states/{}", self.base, self.entity);
+        let body = agent()
+            .get(&url)
+            .set("Authorization", &format!("Bearer {}", self.token))
+            .call()
+            .ok()?
+            .into_string()
+            .ok()?;
+        let v: serde_json::Value = serde_json::from_str(&body).ok()?;
+        let attrs = v.get("attributes")?;
+        for k in ["power", "current_power_w"] {
+            if let Some(w) = attrs.get(k).and_then(|x| x.as_f64()).filter(|w| *w >= 0.0) {
+                return Some(w);
+            }
+        }
+        None
+    }
 }
 
 #[cfg(test)]

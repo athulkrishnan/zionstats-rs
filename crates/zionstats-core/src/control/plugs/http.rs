@@ -120,6 +120,30 @@ impl HttpPlug {
             }
         }
     }
+
+    fn power_url(&self) -> String {
+        match self.kind {
+            HttpKind::Tasmota => format!("http://{}/cm?cmnd=Status%208", self.host),
+            _ => self.status_url(),
+        }
+    }
+
+    /// Wall watts: Shelly Gen1 `GET /relay/{ch}` -> "power"; Gen2
+    /// Switch.GetStatus -> "power"; Tasmota Status 8 ->
+    /// StatusSNS.Energy.Power (both key casings). None = no meter.
+    fn parse_power(kind: HttpKind, body: &str) -> Option<f64> {
+        let v: serde_json::Value = serde_json::from_str(body).ok()?;
+        match kind {
+            HttpKind::ShellyGen1 | HttpKind::ShellyGen2 => {
+                v.get("power")?.as_f64().filter(|p| *p >= 0.0)
+            }
+            HttpKind::Tasmota => {
+                let sns = v.get("StatusSNS")?;
+                let energy = sns.get("Energy").or_else(|| sns.get("energy"))?;
+                energy.get("Power")?.as_f64().filter(|p| *p >= 0.0)
+            }
+        }
+    }
 }
 
 impl Plug for HttpPlug {
@@ -140,6 +164,11 @@ impl Plug for HttpPlug {
     fn status(&mut self) -> Option<bool> {
         let body = http_get(&self.status_url()).ok()?;
         Self::parse_state(self.kind, &body)
+    }
+
+    fn power(&mut self) -> Option<f64> {
+        let body = http_get(&self.power_url()).ok()?;
+        Self::parse_power(self.kind, &body)
     }
 }
 
@@ -228,5 +257,38 @@ mod tests {
             ..cfg
         };
         assert!(HttpPlug::from_config(&nohost).is_err());
+    }
+
+    #[test]
+    fn power_parsing() {
+        assert_eq!(
+            HttpPlug::parse_power(HttpKind::ShellyGen1, r#"{"output":true,"power":42.5}"#),
+            Some(42.5)
+        );
+        assert_eq!(
+            HttpPlug::parse_power(HttpKind::ShellyGen2, r#"{"power":61.25}"#),
+            Some(61.25)
+        );
+        assert_eq!(
+            HttpPlug::parse_power(HttpKind::ShellyGen1, r#"{"output":true}"#),
+            None,
+            "no meter -> None"
+        );
+        assert_eq!(
+            HttpPlug::parse_power(
+                HttpKind::Tasmota,
+                r#"{"StatusSNS":{"Energy":{"Power":13.7}}}"#
+            ),
+            Some(13.7)
+        );
+        assert_eq!(
+            HttpPlug::parse_power(
+                HttpKind::Tasmota,
+                r#"{"StatusSNS":{"energy":{"Power":13.7}}}"#
+            ),
+            Some(13.7),
+            "lower-case Energy casing"
+        );
+        assert_eq!(HttpPlug::parse_power(HttpKind::Tasmota, "not json"), None);
     }
 }

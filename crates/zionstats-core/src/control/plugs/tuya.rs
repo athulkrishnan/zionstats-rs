@@ -351,6 +351,21 @@ impl TuyaPlug {
         None
     }
 
+    /// Live watts from a recognized metering DP only; DP ids vary wildly
+    /// across Tuya firmwares, so unrecognized stays None (never a guessed
+    /// scale) -- Python parity.
+    fn parse_dps_power(v: &serde_json::Value) -> Option<f64> {
+        let dps = v.get("dps")?;
+        for k in ["power", "power_w", "pow"] {
+            if let Some(w) = dps.get(k).and_then(|x| x.as_f64()) {
+                if (0.0..=4000.0).contains(&w) {
+                    return Some(w);
+                }
+            }
+        }
+        None
+    }
+
     pub fn set_power(&mut self, on: bool) -> Result<(), PlugError> {
         let dps = serde_json::json!({ "1": on });
         let sent = self.request(CMD_CONTROL, Some(dps));
@@ -382,6 +397,11 @@ impl Plug for TuyaPlug {
     fn status(&mut self) -> Option<bool> {
         let v = self.request(CMD_DP_QUERY, None)?;
         Self::parse_dps_state(&v)
+    }
+
+    fn power(&mut self) -> Option<f64> {
+        let v = self.request(CMD_DP_QUERY, None)?;
+        Self::parse_dps_power(&v)
     }
 }
 
@@ -541,6 +561,28 @@ mod tests {
         let mut plug = plug_at(port);
         assert_eq!(plug.status(), Some(false));
         h.join().unwrap();
+    }
+
+    #[test]
+    fn dps_power_only_recognized_keys() {
+        assert_eq!(
+            TuyaPlug::parse_dps_power(&serde_json::json!({"dps": {"power": 87.5}})),
+            Some(87.5)
+        );
+        assert_eq!(
+            TuyaPlug::parse_dps_power(&serde_json::json!({"dps": {"pow": 87.5}})),
+            Some(87.5)
+        );
+        assert_eq!(
+            TuyaPlug::parse_dps_power(&serde_json::json!({"dps": {"19": 1234}})),
+            None,
+            "energy total DP is not live watts -- never guessed"
+        );
+        assert_eq!(
+            TuyaPlug::parse_dps_power(&serde_json::json!({"dps": {"power": 99999.0}})),
+            None,
+            "absurd magnitude rejected"
+        );
     }
 
     #[test]

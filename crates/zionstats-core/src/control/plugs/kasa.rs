@@ -109,6 +109,18 @@ impl KasaPlug {
             .and_then(|v| v.as_i64())
             .map(|s| s == 1)
     }
+
+    /// emeter get_realtime -> watts. New firmware reports power_mw
+    /// (milliwatts); old reports power (watts). None = no meter
+    /// (HS103-class) or unrecognized shape.
+    pub fn parse_realtime_watts(body: &serde_json::Value) -> Option<f64> {
+        let rt = body.get("emeter")?.get("get_realtime")?;
+        if let Some(mw) = rt.get("power_mw").and_then(|v| v.as_f64()) {
+            return (mw >= 0.0).then(|| mw / 1000.0);
+        }
+        let p = rt.get("power")?.as_f64()?;
+        (p >= 0.0).then_some(p)
+    }
 }
 
 impl Plug for KasaPlug {
@@ -127,6 +139,11 @@ impl Plug for KasaPlug {
     fn status(&mut self) -> Option<bool> {
         let cmd = serde_json::json!({"system": {"get_sysinfo": {}}});
         Self::parse_sysinfo_state(&self.request(cmd)?)
+    }
+
+    fn power(&mut self) -> Option<f64> {
+        let cmd = serde_json::json!({"emeter": {"get_realtime": {}}});
+        Self::parse_realtime_watts(&self.request(cmd)?)
     }
 }
 
@@ -189,6 +206,28 @@ mod tests {
         };
         assert_eq!(plug.status(), Some(true));
         h.join().unwrap();
+    }
+
+    #[test]
+    fn realtime_watts_shapes() {
+        assert_eq!(
+            KasaPlug::parse_realtime_watts(
+                &serde_json::json!({"emeter": {"get_realtime": {"power_mw": 12345}}})
+            ),
+            Some(12.345)
+        );
+        assert_eq!(
+            KasaPlug::parse_realtime_watts(
+                &serde_json::json!({"emeter": {"get_realtime": {"power": 15.5}}})
+            ),
+            Some(15.5),
+            "legacy firmware reports watts directly"
+        );
+        assert_eq!(
+            KasaPlug::parse_realtime_watts(&serde_json::json!({"emeter": {"get_realtime": {}}})),
+            None
+        );
+        assert_eq!(KasaPlug::parse_realtime_watts(&serde_json::json!({})), None);
     }
 
     #[test]

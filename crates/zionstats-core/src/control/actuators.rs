@@ -39,6 +39,11 @@ pub trait Plug: Send {
     /// None = unreachable / no readback support (Python parity: treated as
     /// verify success — the write-then-verify loop trusts the command).
     fn status(&mut self) -> Option<bool>;
+    /// Live wall watts from the plug's metering hardware; None = no meter
+    /// on this model/firmware. Never guessed.
+    fn power(&mut self) -> Option<f64> {
+        None
+    }
 }
 
 /// Scriptable mock, mirroring Python MockPlug: records commands, can fail
@@ -50,6 +55,8 @@ pub struct MockPlug {
     pub commands: Vec<&'static str>,
     pub fail_next: u32,
     pub lie_status: Option<bool>,
+    /// scriptable wall-watt reading returned by `power()`
+    pub power_w: Option<f64>,
 }
 
 impl MockPlug {
@@ -83,6 +90,9 @@ impl Plug for MockPlug {
     }
     fn status(&mut self) -> Option<bool> {
         Some(self.lie_status.unwrap_or(self.state))
+    }
+    fn power(&mut self) -> Option<f64> {
+        self.power_w
     }
 }
 
