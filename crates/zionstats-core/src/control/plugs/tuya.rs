@@ -26,9 +26,11 @@ use std::net::TcpStream;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use aes::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyInit};
-use aes_gcm::aead::{Aead, AeadCore, OsRng};
-use aes_gcm::{Aes128Gcm, Aes256Gcm, Nonce};
+use aes_gcm::aead::OsRng;
+use aes_gcm::Aes128Gcm;
 use base64::Engine;
+use hmac::{Hmac, Mac};
+use sha2::Sha256;
 
 use super::super::actuators::{Plug, PlugError};
 use crate::config::PlugCfg;
@@ -37,7 +39,11 @@ pub const PORT: u16 = 6668;
 const PREFIX: u32 = 0x0000_55AA;
 const SUFFIX: u32 = 0x0000_AA55;
 const CMD_CONTROL: u32 = 7;
+const CMD_SESS_NEG_START: u32 = 3;
+const CMD_SESS_NEG_RESP: u32 = 4;
+const CMD_SESS_NEG_FINISH: u32 = 5;
 const CMD_DP_QUERY: u32 = 10;
+const CMD_DP_QUERY_NEW: u32 = 16;
 const TIMEOUT: Duration = Duration::from_secs(2);
 
 // ------------------------------------------------------------- frame codec
@@ -56,16 +62,39 @@ pub fn crc32(data: &[u8]) -> u32 {
     !crc
 }
 
-/// Pack one 55AA frame.
+/// Pack one 55AA frame with the CRC32 trailer (v3.3).
 pub fn pack_frame(seqno: u32, cmd: u32, payload: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(payload.len() + 20);
+    pack_frame_trailer(seqno, cmd, payload, None)
+}
+
+/// Pack one 55AA frame; `hmac_key` swaps the CRC32 trailer for the
+/// 32-byte HMAC-SHA256 (v3.4, tinytuya MESSAGE_END_FMT_HMAC).
+/// HMAC-SHA256 trailer (tinytuya pack_message with hmac_key: the
+/// CRC32 field becomes a 32-byte HMAC over header+payload).
+pub fn hmac_trailer(key: &[u8], data: &[u8]) -> Vec<u8> {
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("hmac key");
+    mac.update(data);
+    mac.finalize().into_bytes().to_vec()
+}
+
+pub fn pack_frame_trailer(
+    seqno: u32,
+    cmd: u32,
+    payload: &[u8],
+    hmac_key: Option<&[u8]>,
+) -> Vec<u8> {
+    let trailer_len = if hmac_key.is_some() { 36 } else { 8 };
+    let mut out = Vec::with_capacity(payload.len() + 16 + trailer_len);
     out.extend_from_slice(&PREFIX.to_be_bytes());
     out.extend_from_slice(&seqno.to_be_bytes());
     out.extend_from_slice(&cmd.to_be_bytes());
-    out.extend_from_slice(&((payload.len() as u32) + 8).to_be_bytes());
+    out.extend_from_slice(&((payload.len() as u32) + trailer_len as u32).to_be_bytes());
     out.extend_from_slice(payload);
-    let crc = crc32(&out);
-    out.extend_from_slice(&crc.to_be_bytes());
+    if let Some(key) = hmac_key {
+        out.extend_from_slice(&hmac_trailer(key, &out));
+    } else {
+        out.extend_from_slice(&crc32(&out).to_be_bytes());
+    }
     out.extend_from_slice(&SUFFIX.to_be_bytes());
     out
 }
@@ -76,8 +105,8 @@ pub struct ParsedFrame {
     pub payload: Vec<u8>,
 }
 
-/// Parse one 55AA frame; None on bad magic, truncated data, or CRC
-/// mismatch.
+/// Parse one 55AA frame (CRC32 trailer, v3.3); None on bad magic,
+/// truncation, or CRC mismatch.
 pub fn parse_frame(buf: &[u8]) -> Option<ParsedFrame> {
     if buf.len() < 16 {
         return None;
@@ -101,6 +130,37 @@ pub fn parse_frame(buf: &[u8]) -> Option<ParsedFrame> {
     if suffix != SUFFIX {
         return None;
     }
+    Some(ParsedFrame {
+        seqno,
+        cmd,
+        payload: buf[16..body_end].to_vec(),
+    })
+}
+
+/// Parse a 55AA frame with the HMAC-SHA256 trailer (v3.4).  The frame
+/// length field covers payload + 36 (32-byte HMAC + 4-byte suffix).
+pub fn parse_frame_hmac(buf: &[u8], hmac_key: &[u8]) -> Option<ParsedFrame> {
+    if buf.len() < 16 {
+        return None;
+    }
+    if u32::from_be_bytes(buf[0..4].try_into().ok()?) != PREFIX {
+        return None;
+    }
+    let cmd = u32::from_be_bytes(buf[8..12].try_into().ok()?);
+    let len = u32::from_be_bytes(buf[12..16].try_into().ok()?) as usize;
+    if len < 36 || buf.len() < 16 + len {
+        return None;
+    }
+    let body_end = 16 + len - 36;
+    let hmac = &buf[body_end..body_end + 32];
+    if hmac_trailer(hmac_key, &buf[..body_end]).as_slice() != hmac {
+        return None;
+    }
+    let suffix = u32::from_be_bytes(buf[buf.len() - 4..].try_into().ok()?);
+    if suffix != SUFFIX {
+        return None;
+    }
+    let seqno = u32::from_be_bytes(buf[4..8].try_into().ok()?);
     Some(ParsedFrame {
         seqno,
         cmd,
@@ -160,49 +220,18 @@ pub fn v33_decrypt(key: &[u8], body: &[u8]) -> Option<Vec<u8>> {
     v33_decrypt_raw(key, &ct)
 }
 
-/// v3.4 static body: AES-GCM(local_key) -> nonce(12) || ct || tag(16).
-/// Nonces come from the OS (aead OsRng feature); reuse across messages
-/// under the same key would break GCM, so generation must stay random.
-pub fn v34_encrypt(key: &[u8], plain: &[u8]) -> Option<Vec<u8>> {
-    match key.len() {
-        16 => {
-            let cipher = <Aes128Gcm as KeyInit>::new_from_slice(key).ok()?;
-            let nonce = Aes128Gcm::generate_nonce(&mut OsRng);
-            let ct = cipher.encrypt(&nonce, plain).ok()?;
-            let mut out = Vec::with_capacity(12 + ct.len());
-            out.extend_from_slice(nonce.as_slice());
-            out.extend_from_slice(&ct);
-            Some(out)
-        }
-        32 => {
-            let cipher = <Aes256Gcm as KeyInit>::new_from_slice(key).ok()?;
-            let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-            let ct = cipher.encrypt(&nonce, plain).ok()?;
-            let mut out = Vec::with_capacity(12 + ct.len());
-            out.extend_from_slice(nonce.as_slice());
-            out.extend_from_slice(&ct);
-            Some(out)
-        }
-        _ => None,
-    }
+/// v3.4 body: header + plaintext encrypted TOGETHER with AES-ECB
+/// (tinytuya `_decode_payload`: 3.4 devices encrypt the version header
+/// in addition to the payload).  Key length selects AES-128/192/256.
+pub fn v34_encrypt(key: &[u8], headered: &[u8]) -> Option<Vec<u8>> {
+    v33_encrypt(key, headered)
 }
 
-pub fn v34_decrypt(key: &[u8], body: &[u8]) -> Option<Vec<u8>> {
-    if body.len() < 12 + 16 {
-        return None;
-    }
-    let (nonce, ct) = body.split_at(12);
-    match key.len() {
-        16 => {
-            let cipher = <Aes128Gcm as KeyInit>::new_from_slice(key).ok()?;
-            cipher.decrypt(Nonce::from_slice(nonce), ct).ok()
-        }
-        32 => {
-            let cipher = <Aes256Gcm as KeyInit>::new_from_slice(key).ok()?;
-            cipher.decrypt(Nonce::from_slice(nonce), ct).ok()
-        }
-        _ => None,
-    }
+/// v3.4 response body: AES-ECB decrypt -> PKCS7 unpad (no base64 --
+/// tinytuya decrypts 3.4 payloads with `decode_text=False` and no
+/// b64 layer).
+pub fn v34_decrypt(key: &[u8], ct: &[u8]) -> Option<Vec<u8>> {
+    v33_decrypt_raw(key, ct)
 }
 
 // ------------------------------------------------------------------ client
@@ -210,11 +239,15 @@ pub fn v34_decrypt(key: &[u8], body: &[u8]) -> Option<Vec<u8>> {
 pub struct TuyaPlug {
     name: String,
     id: String,
+    /// the real local key from config
     key: Vec<u8>,
     address: String,
     port: u16,
     version: f32,
     seqno: u32,
+    /// v3.4 session state: client/server nonces XOR'd then ECB-encrypted
+    /// with the local key (tinytuya _negotiate_session_key_generate_finalize)
+    session_key: Option<Vec<u8>>,
 }
 
 impl TuyaPlug {
@@ -244,7 +277,65 @@ impl TuyaPlug {
             port: PORT,
             version: cfg.version,
             seqno: 1,
+            session_key: None,
         }))
+    }
+
+    /// device22-class status query over a fresh negotiated connection.
+    fn status_v34_device22(&mut self) -> Option<bool> {
+        let mut stream = TcpStream::connect((self.address.as_str(), self.port)).ok()?;
+        stream.set_read_timeout(Some(TIMEOUT)).ok();
+        stream.set_write_timeout(Some(TIMEOUT)).ok();
+        self.negotiate(&mut stream)?;
+        let Some(skey) = self.session_key.clone() else {
+            eprintln!("D22: no session key");
+            return None;
+        };
+        let Some(body) = v34_encrypt(&skey, b"{}") else {
+            eprintln!("D22: encrypt failed");
+            return None;
+        };
+        let seqno = self.seqno;
+        self.seqno += 1;
+        let frame = pack_frame_trailer(seqno, CMD_DP_QUERY_NEW, &body, None);
+        if let Err(e) = stream.write_all(&frame) {
+            eprintln!("D22: write failed: {e}");
+            return None;
+        }
+        let mut buf = vec![0u8; 16];
+        if stream.read_exact(&mut buf).is_err() {
+            eprintln!("D22: header read failed (timeout?)");
+            return None;
+        }
+        if u32::from_be_bytes(buf[0..4].try_into().ok()?) != PREFIX {
+            eprintln!("D22: bad magic");
+            return None;
+        }
+        let len = u32::from_be_bytes(buf[12..16].try_into().ok()?) as usize;
+        if len < 8 {
+            eprintln!("D22: bad len {len}");
+            return None;
+        }
+        let mut rest = vec![0u8; len];
+        if stream.read_exact(&mut rest).is_err() {
+            eprintln!("D22: body read failed");
+            return None;
+        }
+        buf.extend_from_slice(&rest);
+        let Some(parsed) = parse_frame(&buf) else {
+            eprintln!("D22: CRC/parse failed ({} bytes)", buf.len());
+            return None;
+        };
+        let Some(pt) = v34_decrypt(&skey, &parsed.payload) else {
+            eprintln!("D22: decrypt failed ({} bytes)", parsed.payload.len());
+            return None;
+        };
+        eprintln!("D22: pt {}", String::from_utf8_lossy(&pt));
+        let Ok(v) = serde_json::from_slice::<serde_json::Value>(&pt) else {
+            eprintln!("D22: json failed");
+            return None;
+        };
+        Self::parse_dps_state(&v)
     }
 
     fn now_unix() -> u64 {
@@ -252,6 +343,131 @@ impl TuyaPlug {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0)
+    }
+
+    /// 16 random bytes from the OS (client nonce for v3.4 negotiation).
+    /// (nonce is 12 B; pad to the protocol's 16-byte nonce width)
+    fn random_16() -> [u8; 16] {
+        use aes_gcm::aead::AeadCore;
+        let n = Aes128Gcm::generate_nonce(&mut OsRng);
+        let mut out = [0u8; 16];
+        out[..12].copy_from_slice(n.as_slice());
+        out
+    }
+
+    /// v3.4 session-key negotiation (tinytuya
+    /// _negotiate_session_key*): STEP1 sends a fresh 16-byte client
+    /// nonce; the device answers SESS_KEY_NEG_RESP with
+    /// [server_nonce(16) || HMAC(local_key, client_nonce)(32)] ECB-
+    /// encrypted with the local key; we answer with
+    /// HMAC(local_key, server_nonce); the session key is
+    /// ECB(local_key, client_nonce XOR server_nonce).  Everything after
+    /// negotiation uses the session key and the HMAC trailer.
+    fn negotiate(&mut self, stream: &mut TcpStream) -> Option<()> {
+        self.session_key = None;
+        self.seqno = 1;
+        let client_nonce = Self::random_16();
+        let frame = {
+            let seqno = self.seqno;
+            self.seqno += 1;
+            let body = v33_encrypt(&self.key, &client_nonce)?; // STEP1 has no header
+            pack_frame_trailer(seqno, CMD_SESS_NEG_START, &body, Some(&self.key))
+        };
+        if stream.write_all(&frame).is_err() {
+            return None;
+        }
+        let _ = stream.flush();
+        let Some(parsed) = self.read_frame_hmac_dbg(stream) else {
+            return None;
+        };
+        if parsed.cmd != CMD_SESS_NEG_RESP {
+            return None;
+        }
+        // the payload carries a 4-byte retcode before the ciphertext
+        let Some(ct) = parsed.payload.get(4..) else {
+            return None;
+        };
+        let Some(resp) = v33_decrypt_raw(&self.key, ct) else {
+            return None;
+        };
+        if resp.len() < 48 {
+            return None;
+        }
+        let server_nonce = &resp[..16];
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.key).ok()?;
+        mac.update(&client_nonce);
+        if mac.finalize().into_bytes().as_slice() != &resp[16..48] {
+            {
+                eprintln!("NEG-FAIL #3");
+                return None;
+            }
+        }
+        // step 3: HMAC(local_key, server_nonce)
+        let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(&self.key).ok()?;
+        mac.update(server_nonce);
+        let finish = mac.finalize().into_bytes().to_vec();
+        let frame = {
+            let seqno = self.seqno;
+            self.seqno += 1;
+            let body = v33_encrypt(&self.key, &finish)?;
+            pack_frame_trailer(seqno, CMD_SESS_NEG_FINISH, &body, Some(&self.key))
+        };
+        stream.write_all(&frame).ok()?;
+        stream.flush().ok()?;
+        // session key = ECB(local_key, client_nonce XOR server_nonce)
+        let mut xored = [0u8; 16];
+        for i in 0..16 {
+            xored[i] = client_nonce[i] ^ server_nonce[i];
+        }
+        let Some(skey) = v33_encrypt(&self.key, &xored) else {
+            return None;
+        };
+        self.session_key = Some(skey);
+        Some(())
+    }
+
+    fn read_frame_hmac_dbg(&self, stream: &mut TcpStream) -> Option<ParsedFrame> {
+        let mut buf = vec![0u8; 16];
+        if stream.read_exact(&mut buf).is_err() {
+            return None;
+        }
+        if u32::from_be_bytes(buf[0..4].try_into().ok()?) != PREFIX {
+            return None;
+        }
+        let len = u32::from_be_bytes(buf[12..16].try_into().ok()?) as usize;
+        if len < 8 {
+            return None;
+        }
+        let mut rest = vec![0u8; len];
+        stream.read_exact(&mut rest).ok()?;
+        buf.extend_from_slice(&rest);
+        match parse_frame_hmac(&buf, &self.key) {
+            Some(f) => Some(f),
+            None => None,
+        }
+    }
+
+    /// Read one frame: header prefix, then the length-delimited remainder
+    /// (HMAC-aware for v3.4).
+    fn read_frame_hmac(&self, stream: &mut TcpStream) -> Option<ParsedFrame> {
+        let mut buf = vec![0u8; 16];
+        stream.read_exact(&mut buf).ok()?;
+        if u32::from_be_bytes(buf[0..4].try_into().ok()?) != PREFIX {
+            return None;
+        }
+        let len = u32::from_be_bytes(buf[12..16].try_into().ok()?) as usize;
+        if len < 8 {
+            return None;
+        }
+        let mut rest = vec![0u8; len];
+        stream.read_exact(&mut rest).ok()?;
+        buf.extend_from_slice(&rest);
+        if self.version >= 3.4 {
+            let skey = self.session_key.clone().unwrap_or_else(|| self.key.clone());
+            parse_frame_hmac(&buf, &skey)
+        } else {
+            parse_frame(&buf)
+        }
     }
 
     fn build_payload(&mut self, cmd: u32, dps: Option<serde_json::Value>) -> Vec<u8> {
@@ -265,43 +481,54 @@ impl TuyaPlug {
             json["dps"] = dps;
         }
         let mut plain = serde_json::to_vec(&json).unwrap_or_default();
-        // version header: CONTROL carries it, DP_QUERY does not
-        // (NO_PROTOCOL_HEADER_CMDS in the tinytuya source)
-        let with_header = cmd != CMD_DP_QUERY;
-        let body = match self.version {
+        let seqno = self.seqno;
+        self.seqno = self.seqno.wrapping_add(1);
+        match self.version {
             v if v >= 3.4 => {
+                // tinytuya 3.4 post-negotiation: "3.4"+12-zero header +
+                // payload encrypted TOGETHER under the SESSION key, but
+                // only for commands outside NO_PROTOCOL_HEADER_CMDS
+                // (DP_QUERY/heartbeat go header-less); HMAC trailer under
+                // the session key
+                let with_header = cmd != CMD_DP_QUERY;
                 if with_header {
                     let mut h = b"3.4".to_vec();
                     h.extend_from_slice(&[0u8; 12]);
                     h.extend_from_slice(&plain);
                     plain = h;
                 }
-                v34_encrypt(&self.key, &plain).unwrap_or_default()
+                let skey = self.session_key.clone().unwrap_or_else(|| self.key.clone());
+                let body = v34_encrypt(&skey, &plain).unwrap_or_default();
+                pack_frame_trailer(seqno, cmd, &body, Some(&skey))
             }
             _ => {
+                // v3.3: ECB over the JSON; CONTROL carries the header,
+                // DP_QUERY does not (NO_PROTOCOL_HEADER_CMDS)
+                let with_header = cmd != CMD_DP_QUERY;
                 let ct = v33_encrypt(&self.key, &plain).unwrap_or_default();
-                if with_header {
+                let body = if with_header {
                     let mut h = b"3.3".to_vec();
                     h.extend_from_slice(&[0u8; 12]);
                     h.extend_from_slice(&ct);
                     h
                 } else {
                     ct
-                }
+                };
+                pack_frame(seqno, cmd, &body)
             }
-        };
-        let seqno = self.seqno;
-        self.seqno = self.seqno.wrapping_add(1);
-        pack_frame(seqno, cmd, &body)
+        }
     }
 
     /// Round-trip one request; returns the response JSON (after crypto +
     /// retcode handling). None on transport/crypto/parse failure.
     fn request(&mut self, cmd: u32, dps: Option<serde_json::Value>) -> Option<serde_json::Value> {
-        let frame = self.build_payload(cmd, dps);
         let mut stream = TcpStream::connect((self.address.as_str(), self.port)).ok()?;
         stream.set_read_timeout(Some(TIMEOUT)).ok();
         stream.set_write_timeout(Some(TIMEOUT)).ok();
+        if self.version >= 3.4 {
+            self.negotiate(&mut stream)?;
+        }
+        let frame = self.build_payload(cmd, dps);
         stream.write_all(&frame).ok()?;
         // read one frame: header prefix, then length-delimited remainder
         let mut buf = vec![0u8; 16];
@@ -313,10 +540,14 @@ impl TuyaPlug {
         if len < 8 {
             return None;
         }
-        let mut rest = vec![0u8; len - 8 + 8];
+        let mut rest = vec![0u8; len];
         stream.read_exact(&mut rest).ok()?;
         buf.extend_from_slice(&rest);
-        let parsed = parse_frame(&buf)?;
+        let parsed = if self.version >= 3.4 {
+            parse_frame_hmac(&buf, &self.key)?
+        } else {
+            parse_frame(&buf)?
+        };
         self.decode_response(&parsed.payload)
     }
 
@@ -395,6 +626,14 @@ impl Plug for TuyaPlug {
     /// None = unreachable / undecryptable / no-readback firmware; the
     /// verify loop treats it like the Python client does (caller policy).
     fn status(&mut self) -> Option<bool> {
+        if self.version >= 3.4 {
+            // Hardware-verified (ZEB-SP110, 2026-10-19): post-negotiation
+            // status on this device22-class firmware is DP_QUERY_NEW
+            // (cmd 16) with an ECB(session_key, "{}") body under a CRC32
+            // trailer -- the header+HMAC shape gets ignored.  The
+            // response is ECB(session_key, PKCS7(json)) with no retcode.
+            return self.status_v34_device22();
+        }
         let v = self.request(CMD_DP_QUERY, None)?;
         Self::parse_dps_state(&v)
     }
@@ -419,6 +658,7 @@ mod tests {
             port,
             version: 3.3,
             seqno: 1,
+            session_key: None,
         }
     }
 
@@ -489,17 +729,25 @@ mod tests {
     }
 
     #[test]
-    fn v34_codec_round_trip() {
+    fn v34_codec_round_trip_and_hmac_trailer() {
         let key = b"0123456789abcdef";
-        let plain = br#"{"devId":"x"}"#;
-        let body = v34_encrypt(key, plain).unwrap();
-        assert!(body.len() > 12 + 16);
-        assert_eq!(v34_decrypt(key, &body).unwrap(), plain);
-        // tampered tag must fail authentication
-        let mut bad = body.clone();
-        let last = bad.len() - 1;
+        let plain = br#"3.4\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00{"devId":"x"}"#;
+        let ct = v34_encrypt(key, plain).unwrap();
+        assert_eq!(ct.len() % 16, 0, "ECB blocks");
+        assert_eq!(v34_decrypt(key, &ct).unwrap(), plain);
+        // HMAC trailer: pack/parse round trip, tamper detection
+        let frame = pack_frame_trailer(1, CMD_DP_QUERY, b"body", Some(key));
+        let parsed = parse_frame_hmac(&frame, key).unwrap();
+        assert_eq!(parsed.payload, b"body");
+        let mut bad = frame.clone();
+        let last = bad.len() - 5;
         bad[last] ^= 0x01;
-        assert!(v34_decrypt(key, &bad).is_none());
+        assert!(
+            parse_frame_hmac(&bad, key).is_none(),
+            "HMAC must detect tampering"
+        );
+        // a v3.3 CRC32 frame must NOT parse as hmac-framed
+        assert!(parse_frame_hmac(&pack_frame(1, CMD_DP_QUERY, b"body"), key).is_none());
     }
 
     /// Mock server for one exchange: validates the frame + crypto, then
