@@ -7,6 +7,7 @@ pub mod mock;
 pub mod nvml;
 #[cfg(feature = "nvml")]
 pub mod nvml_pmon;
+pub mod replay;
 
 use crate::types::{DeviceInfo, Environment, GpuProc, Sample};
 

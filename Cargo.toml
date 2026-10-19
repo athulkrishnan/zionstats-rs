@@ -41,6 +41,7 @@ aes = "0.8"
 ecb = { version = "0.1", features = ["std"] }
 aes-gcm = "0.10"
 base64 = "0.22"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 libc = "0.2"
 thiserror = "1"
 log = "0.4"

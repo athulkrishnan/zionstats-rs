@@ -55,6 +55,7 @@ pub const RING_MEM_FRAC: usize = 5;
 // header flags
 pub const FLAG_READONLY: u32 = 1 << 0;
 pub const FLAG_DEMO: u32 = 1 << 1;
+pub const FLAG_REPLAY: u32 = 1 << 2;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, FromBytes, Immutable, IntoBytes, KnownLayout)]

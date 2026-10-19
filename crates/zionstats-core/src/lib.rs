@@ -11,6 +11,7 @@ pub mod control;
 pub mod insights;
 pub mod metrics;
 pub mod procfs;
+pub mod recorder;
 pub mod shm;
 pub mod source;
 pub mod types;

@@ -214,7 +214,9 @@ fn ui(
     let env_host = get_fixed(&frame.env.hostname);
     let driver = get_fixed(&frame.env.driver);
     let flags = frame.header.flags;
-    let mode_tag: String = if flags & 2 != 0 {
+    let mode_tag: String = if flags & 4 != 0 {
+        "REPLAY".to_string()
+    } else if flags & 2 != 0 {
         "demo".to_string()
     } else {
         get_fixed(&frame.env.provider)

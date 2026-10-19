@@ -20,12 +20,26 @@ impl DemoChild {
 }
 
 pub fn spawn(config_path: Option<&std::path::Path>, readonly: bool) -> Result<DemoChild, String> {
+    spawn_with_args(config_path, readonly, &[])
+}
+
+/// Spawn the embedded daemon with extra CLI arguments (replay uses
+/// `--replay FILE`).
+pub fn spawn_with_args(
+    config_path: Option<&std::path::Path>,
+    readonly: bool,
+    extra: &[&str],
+) -> Result<DemoChild, String> {
     use std::os::unix::process::CommandExt;
 
     let exe = std::env::current_exe().map_err(|e| format!("current_exe: {e}"))?;
     let mut cmd = Command::new(exe);
-    cmd.args(["--daemon", "--demo"])
-        .process_group(0)
+    cmd.arg("--daemon");
+    if extra.is_empty() {
+        cmd.arg("--demo");
+    }
+    cmd.args(extra);
+    cmd.process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());

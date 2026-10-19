@@ -31,6 +31,10 @@ pub struct DaemonOpts {
     pub demo: bool,
     pub config_path: Option<std::path::PathBuf>,
     pub mode_override: Option<CoolingMode>,
+    /// append one Python-compatible frame per tick to this ndjson(.gz)
+    pub record: Option<std::path::PathBuf>,
+    /// replay a recorded trace instead of live hardware
+    pub replay: Option<std::path::PathBuf>,
 }
 
 impl Default for DaemonOpts {
@@ -43,12 +47,15 @@ impl Default for DaemonOpts {
             demo: false,
             config_path: None,
             mode_override: None,
+            record: None,
+            replay: None,
         }
     }
 }
 
 enum ActiveSource {
     Demo(Box<DemoSource>),
+    Replay(Box<zionstats_core::source::replay::ReplaySource>),
     #[cfg(feature = "nvml")]
     Nvml(Box<zionstats_core::source::nvml::NvmlSource>),
 }
@@ -57,6 +64,7 @@ impl ActiveSource {
     fn as_source(&mut self) -> &mut dyn Source {
         match self {
             ActiveSource::Demo(d) => d.as_mut(),
+            ActiveSource::Replay(r) => r.as_mut(),
             #[cfg(feature = "nvml")]
             ActiveSource::Nvml(n) => n.as_mut(),
         }
@@ -64,6 +72,16 @@ impl ActiveSource {
 }
 
 fn build_source(opts: &DaemonOpts) -> Result<ActiveSource, String> {
+    if let Some(path) = &opts.replay {
+        let src = zionstats_core::source::replay::ReplaySource::from_path(path)
+            .map_err(|e| format!("replay: {e}"))?;
+        log::info!(
+            "replay: {} frames from {}",
+            src.frame_count(),
+            path.display()
+        );
+        return Ok(ActiveSource::Replay(Box::new(src)));
+    }
     if opts.demo {
         return Ok(ActiveSource::Demo(Box::new(DemoSource::new())));
     }
@@ -267,6 +285,21 @@ async fn run_async(opts: DaemonOpts) -> i32 {
     let mut resolver = zionstats_core::cgroup::CgroupResolver::default();
     let mut last_procs: Vec<ProcRow> = Vec::new();
     let mut tick_n: u64 = 0;
+
+    // v0.7: trace recorder (--record FILE.ndjson[.gz])
+    let mut recorder = match &opts.record {
+        Some(path) => match zionstats_core::recorder::Recorder::create(path) {
+            Ok(r) => {
+                log::info!("recording trace to {}", path.display());
+                Some(r)
+            }
+            Err(e) => {
+                log::warn!("recorder disabled: {e}");
+                None
+            }
+        },
+        None => None,
+    };
 
     // v0.7 climate layer: shared weather cache with the Python stack
     let mut weather_prov: Option<zionstats_core::climate::WeatherProvider> =
@@ -542,7 +575,9 @@ async fn run_async(opts: DaemonOpts) -> i32 {
                 let header = view.header();
                 header.gpu_count = samples.len().min(MAX_GPUS) as u32;
                 header.proc_count = last_procs.len().min(MAX_PROCS) as u32;
-                header.flags = if readonly { 1 } else { 0 } | if opts.demo { 2 } else { 0 };
+                header.flags = if readonly { 1 } else { 0 }
+                    | if opts.demo { 2 } else { 0 }
+                    | if opts.replay.is_some() { 4 } else { 0 };
             }
             for (i, b) in live_insights.iter().enumerate() {
                 if let Some(slot) = view.insight_mut(i) {
@@ -632,6 +667,36 @@ async fn run_async(opts: DaemonOpts) -> i32 {
                 first = false;
             }
         });
+
+        if let Some(rec) = recorder.as_mut() {
+            let gpu_procs: Vec<zionstats_core::types::GpuProc> = last_procs
+                .iter()
+                .map(|p| zionstats_core::types::GpuProc {
+                    pid: p.pid,
+                    gpu_index: p.gpu_idx as u32,
+                    kind: match p.kind {
+                        1 => zionstats_core::types::ProcKind::Graphics,
+                        2 => zionstats_core::types::ProcKind::ComputeAndGraphics,
+                        _ => zionstats_core::types::ProcKind::Compute,
+                    },
+                    mem_used: p.mem_used,
+                    sm_pct: p.sm_pct.is_finite().then_some(p.sm_pct),
+                    mem_pct: p.mem_pct.is_finite().then_some(p.mem_pct),
+                    enc_pct: p.enc_pct.is_finite().then_some(p.enc_pct),
+                    dec_pct: p.dec_pct.is_finite().then_some(p.dec_pct),
+                    cpu_pct: None,
+                    uid: 0,
+                    user: p.user.clone(),
+                    command: p.command.clone(),
+                    start_time: 0,
+                })
+                .collect();
+            let line = zionstats_core::recorder::frame_to_line(&env, &samples, &gpu_procs);
+            if let Err(e) = rec.write(&line) {
+                log::warn!("recorder stopped: {e}");
+                recorder = None;
+            }
+        }
 
         // refresh the metrics frame
         {

@@ -30,6 +30,12 @@ struct Cli {
     /// Print the resolved configuration and exit (never touches NVML)
     #[arg(long)]
     check_config: bool,
+    /// Record one Python-compatible frame per tick to this ndjson(.gz)
+    #[arg(long)]
+    record: Option<PathBuf>,
+    /// Replay a recorded trace instead of live hardware
+    #[arg(long)]
+    replay: Option<PathBuf>,
 }
 
 impl From<&Cli> for DaemonOpts {
@@ -45,6 +51,8 @@ impl From<&Cli> for DaemonOpts {
                 .mode
                 .as_deref()
                 .and_then(zionstats_core::control::CoolingMode::parse),
+            record: c.record.clone(),
+            replay: c.replay.clone(),
         }
     }
 }

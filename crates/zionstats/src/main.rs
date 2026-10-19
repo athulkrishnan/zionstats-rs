@@ -36,6 +36,9 @@ struct Cli {
     /// Cooling mode override (off|dry_run|auto|manual) [daemon only]
     #[arg(long)]
     mode: Option<String>,
+    /// Replay a recorded trace (TUI over an embedded replay daemon)
+    #[arg(long)]
+    replay: Option<PathBuf>,
     /// Emit shell completions for the given shell and exit
     #[arg(long, value_enum)]
     completions: Option<Shell>,
@@ -73,6 +76,8 @@ fn main() {
                 .mode
                 .as_deref()
                 .and_then(zionstats_core::control::CoolingMode::parse),
+            record: None,
+            replay: cli.replay.clone(),
         };
         zionstats_daemon::daemon::run(opts)
     } else {
@@ -97,6 +102,37 @@ fn run_tui_mode(cli: &Cli) -> i32 {
     // live daemon already publishing? attach directly.
     if ShmReader::attach(unsafe { libc::getuid() }).is_ok() {
         return zionstats_tui::app::run(tui_opts(cli.exit_after_ms, cli.print_first_frame_ms));
+    }
+    // --replay: spawn an embedded replay daemon (same orphan-proofing as
+    // the demo child), then attach
+    if let Some(replay_path) = cli.replay.clone() {
+        match demo_child::spawn_with_args(
+            cli.config.as_deref(),
+            cli.readonly,
+            &["--replay", replay_path.to_string_lossy().as_ref()],
+        ) {
+            Ok(mut child) => {
+                match demo_child::wait_for_first_frame(&mut child, 2000) {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        eprintln!("zionstats: a zionstats writer is already active; attaching to live frames");
+                    }
+                    Err(e) => {
+                        child.shutdown();
+                        eprintln!("zionstats: replay daemon error: {e}");
+                        return 2;
+                    }
+                }
+                return zionstats_tui::app::run(tui_opts(
+                    cli.exit_after_ms,
+                    cli.print_first_frame_ms,
+                ));
+            }
+            Err(e) => {
+                eprintln!("zionstats: --replay daemon failed to start: {e}");
+                return 2;
+            }
+        }
     }
     // --demo: spawn an embedded demo daemon, then attach
     if cli.demo {
