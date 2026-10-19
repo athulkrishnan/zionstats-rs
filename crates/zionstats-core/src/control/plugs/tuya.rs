@@ -377,9 +377,7 @@ impl TuyaPlug {
             return None;
         }
         let _ = stream.flush();
-        let Some(parsed) = self.read_frame_hmac_dbg(stream) else {
-            return None;
-        };
+        let parsed = self.read_frame_hmac_dbg(stream)?;
         if parsed.cmd != CMD_SESS_NEG_RESP {
             return None;
         }
@@ -444,29 +442,6 @@ impl TuyaPlug {
         match parse_frame_hmac(&buf, &self.key) {
             Some(f) => Some(f),
             None => None,
-        }
-    }
-
-    /// Read one frame: header prefix, then the length-delimited remainder
-    /// (HMAC-aware for v3.4).
-    fn read_frame_hmac(&self, stream: &mut TcpStream) -> Option<ParsedFrame> {
-        let mut buf = vec![0u8; 16];
-        stream.read_exact(&mut buf).ok()?;
-        if u32::from_be_bytes(buf[0..4].try_into().ok()?) != PREFIX {
-            return None;
-        }
-        let len = u32::from_be_bytes(buf[12..16].try_into().ok()?) as usize;
-        if len < 8 {
-            return None;
-        }
-        let mut rest = vec![0u8; len];
-        stream.read_exact(&mut rest).ok()?;
-        buf.extend_from_slice(&rest);
-        if self.version >= 3.4 {
-            let skey = self.session_key.clone().unwrap_or_else(|| self.key.clone());
-            parse_frame_hmac(&buf, &skey)
-        } else {
-            parse_frame(&buf)
         }
     }
 
