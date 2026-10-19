@@ -36,6 +36,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 regex = "1"
 ureq = { version = "2", default-features = false, features = ["json"] }
+aes = "0.8"
+ecb = { version = "0.1", features = ["std"] }
+aes-gcm = "0.10"
+base64 = "0.22"
 libc = "0.2"
 thiserror = "1"
 log = "0.4"

@@ -57,11 +57,26 @@ pub fn print_resolved(cfg: &Config, warnings: &[String], overrides: &[String]) -
                     p.backend, p.name, p.host, p.gen, p.channel
                 );
             }
-            "tuya" | "kasa" | "ha" => {
+            "tuya" => {
+                let addr = p
+                    .address
+                    .clone()
+                    .unwrap_or_else(|| "(no address -- skipped)".into());
                 println!(
-                    "    {}: {} @ {} -- needs the Python daemon (zionstats --log); skipped here",
-                    p.backend, p.name, p.host
+                    "    tuya: {} @ {addr} (id {}, v{:.1})",
+                    p.name, p.id, p.version
                 );
+            }
+            "kasa" => {
+                println!("    kasa: {} @ {} (tcp 9999)", p.name, p.host);
+            }
+            "ha" => {
+                let entity = p
+                    .entity_id
+                    .clone()
+                    .unwrap_or_else(|| "(no entity_id)".into());
+                let base = p.base_url.clone().unwrap_or_else(|| "(no base_url)".into());
+                println!("    ha: {} -> {entity} @ {base}", p.name);
             }
             other => println!("    {other}: UNKNOWN backend -- will be skipped with a warning"),
         }

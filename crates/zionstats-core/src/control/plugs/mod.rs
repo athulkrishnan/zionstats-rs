@@ -7,6 +7,7 @@
 pub mod ha;
 pub mod http;
 pub mod kasa;
+pub mod tuya;
 
 use super::actuators::Plug;
 use crate::config::PlugCfg;
@@ -20,8 +21,10 @@ pub fn from_config(cfg: &PlugCfg) -> Result<Option<Box<dyn Plug>>, String> {
             Some(p) => Ok(Some(Box::new(p))),
             None => Ok(None),
         },
-        // landed in the next commit (tuya bridge)
-        "tuya" => Ok(None),
+        "tuya" => match tuya::TuyaPlug::from_config(cfg)? {
+            Some(p) => Ok(Some(Box::new(p))),
+            None => Ok(None),
+        },
         "kasa" => match kasa::KasaPlug::from_config(cfg)? {
             Some(p) => Ok(Some(Box::new(p))),
             None => Ok(None),

@@ -19,6 +19,10 @@ serde_json.workspace = true
 toml.workspace = true
 regex.workspace = true
 ureq.workspace = true
+aes.workspace = true
+ecb.workspace = true
+aes-gcm = { workspace = true, features = ["getrandom"] }
+base64.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
