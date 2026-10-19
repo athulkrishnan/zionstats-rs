@@ -382,12 +382,8 @@ impl TuyaPlug {
             return None;
         }
         // the payload carries a 4-byte retcode before the ciphertext
-        let Some(ct) = parsed.payload.get(4..) else {
-            return None;
-        };
-        let Some(resp) = v33_decrypt_raw(&self.key, ct) else {
-            return None;
-        };
+        let ct = parsed.payload.get(4..)?;
+        let resp = v33_decrypt_raw(&self.key, ct)?;
         if resp.len() < 48 {
             return None;
         }
@@ -417,9 +413,7 @@ impl TuyaPlug {
         for i in 0..16 {
             xored[i] = client_nonce[i] ^ server_nonce[i];
         }
-        let Some(skey) = v33_encrypt(&self.key, &xored) else {
-            return None;
-        };
+        let skey = v33_encrypt(&self.key, &xored)?;
         self.session_key = Some(skey);
         Some(())
     }
@@ -439,10 +433,7 @@ impl TuyaPlug {
         let mut rest = vec![0u8; len];
         stream.read_exact(&mut rest).ok()?;
         buf.extend_from_slice(&rest);
-        match parse_frame_hmac(&buf, &self.key) {
-            Some(f) => Some(f),
-            None => None,
-        }
+        parse_frame_hmac(&buf, &self.key)
     }
 
     fn build_payload(&mut self, cmd: u32, dps: Option<serde_json::Value>) -> Vec<u8> {
