@@ -26,5 +26,7 @@ log.workspace = true
 env_logger.workspace = true
 
 [features]
-default = ["nvml"]
+# the TUI never links NVML; the unified `zionstats` bin opts the core
+# feature in for its daemon side
+default = []
 nvml = ["zionstats-core/nvml"]
