@@ -5,6 +5,8 @@ pub mod demo;
 pub mod mock;
 #[cfg(feature = "nvml")]
 pub mod nvml;
+#[cfg(feature = "nvml")]
+pub mod nvml_pmon;
 
 use crate::types::{DeviceInfo, Environment, GpuProc, Sample};
 

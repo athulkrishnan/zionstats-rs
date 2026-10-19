@@ -13,6 +13,7 @@ use nvml_wrapper::enum_wrappers::device::{
 use nvml_wrapper::enums::device::UsedGpuMemory;
 use nvml_wrapper::Nvml;
 
+use super::nvml_pmon::PmonSource;
 use super::{Source, SourceError};
 use crate::types::{decode_throttle, DeviceInfo, Environment, GpuProc, ProcKind, Sample};
 
@@ -21,6 +22,10 @@ pub struct NvmlSource {
     indices: Vec<u32>,
     /// last /proc cpu totals per pid for the CPU% delta
     last_cpu: std::sync::Mutex<std::collections::HashMap<u32, (u64, SystemTime)>>,
+    /// raw-NVML per-process utilization (pmon); None when the sym binding
+    /// is unavailable on this box
+    pmon: Option<super::nvml_pmon::NvmlPmonFfi>,
+    pmon_trackers: Vec<super::nvml_pmon::PmonTracker>,
 }
 
 // SAFETY: the daemon drives NvmlSource from a single poll task.
@@ -46,10 +51,14 @@ impl NvmlSource {
         if indices.is_empty() {
             return Err(SourceError::NoDevices);
         }
+        let pmon = super::nvml_pmon::NvmlPmonFfi::try_new();
+        let n = indices.len();
         Ok(NvmlSource {
             nvml,
             indices,
             last_cpu: std::sync::Mutex::new(std::collections::HashMap::new()),
+            pmon,
+            pmon_trackers: (0..n).map(|_| Default::default()).collect(),
         })
     }
 }
@@ -189,10 +198,34 @@ impl Source for NvmlSource {
     fn processes(&mut self) -> Vec<GpuProc> {
         let now = SystemTime::now();
         let mut out: Vec<GpuProc> = Vec::new();
-        for i in &self.indices {
+        for (pos, i) in self.indices.iter().enumerate() {
             let Ok(dev) = self.nvml.device_by_index(*i) else {
                 continue;
             };
+            // per-process utilization via the raw FFI (best-effort: the
+            // slots stay None when the sym is absent or the call fails)
+            let pmon_by_pid: std::collections::HashMap<u32, super::nvml_pmon::ProcUtilSample> =
+                match (self.pmon.as_mut(), self.pmon_trackers.get_mut(pos)) {
+                    (Some(pmon), Some(tracker)) => {
+                        // SAFETY: the wrapper hands out the raw nvmlDevice_t
+                        // it already owns; we pass it straight back to NVML.
+                        let raw = unsafe { dev.handle() };
+                        match pmon.fetch(raw, tracker.last_seen_ms) {
+                            Some(samples) => {
+                                let m: std::collections::HashMap<
+                                    u32,
+                                    super::nvml_pmon::ProcUtilSample,
+                                > = samples.iter().map(|s| (s.pid, *s)).collect();
+                                if let Some(mx) = samples.iter().map(|s| s.ts_ms).max() {
+                                    tracker.last_seen_ms = mx;
+                                }
+                                m
+                            }
+                            None => Default::default(),
+                        }
+                    }
+                    _ => Default::default(),
+                };
             let mut per_kind: Vec<GpuProc> = Vec::new();
             let compute = dev.running_compute_processes();
             for (kind, infos) in [
@@ -201,6 +234,17 @@ impl Source for NvmlSource {
             ] {
                 if let Ok(list) = infos {
                     for p in list {
+                        let (sm_pct, mem_pct, enc_pct, dec_pct) = pmon_by_pid
+                            .get(&p.pid)
+                            .map(|s| {
+                                (
+                                    Some(s.sm as f32),
+                                    Some(s.mem as f32),
+                                    Some(s.enc as f32),
+                                    Some(s.dec as f32),
+                                )
+                            })
+                            .unwrap_or((None, None, None, None));
                         per_kind.push(GpuProc {
                             pid: p.pid,
                             gpu_index: *i,
@@ -209,10 +253,10 @@ impl Source for NvmlSource {
                                 UsedGpuMemory::Used(v) => v,
                                 UsedGpuMemory::Unavailable => 0,
                             },
-                            sm_pct: None, // pmon FFI lands in a follow-up
-                            mem_pct: None,
-                            enc_pct: None,
-                            dec_pct: None,
+                            sm_pct,
+                            mem_pct,
+                            enc_pct,
+                            dec_pct,
                             cpu_pct: None,
                             uid: 0,
                             user: "?".into(),

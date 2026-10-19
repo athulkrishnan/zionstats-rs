@@ -2280,6 +2280,7 @@ dependencies = [
  "log",
  "memmap2",
  "nvml-wrapper",
+ "nvml-wrapper-sys",
  "regex",
  "serde",
  "serde_json",

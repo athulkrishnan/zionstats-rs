@@ -21,6 +21,7 @@ zionstats-daemon = { path = "crates/zionstats-daemon", default-features = false 
 zionstats-tui = { path = "crates/zionstats-tui", default-features = false }
 zerocopy = { version = "0.8", features = ["derive"] }
 nvml-wrapper = "0.13"
+nvml-wrapper-sys = "0.10"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync", "signal", "net"] }
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto"] }

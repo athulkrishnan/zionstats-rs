@@ -12,6 +12,7 @@ rust-version.workspace = true
 zerocopy.workspace = true
 memmap2.workspace = true
 nvml-wrapper = { workspace = true, optional = true }
+nvml-wrapper-sys = { workspace = true, optional = true }
 thiserror.workspace = true
 log.workspace = true
 serde.workspace = true
@@ -39,4 +40,4 @@ harness = false
 
 [features]
 default = ["nvml"]
-nvml = ["dep:nvml-wrapper"]
+nvml = ["dep:nvml-wrapper", "dep:nvml-wrapper-sys"]
