@@ -10,7 +10,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use zionstats_core::control::actuators::FanActuator;
 #[cfg_attr(test, allow(unused_imports))]
 use zionstats_core::control::actuators::{verify_and_retry, Plug};
-use zionstats_core::control::plugs_http::HttpPlug;
+use zionstats_core::control::plugs;
 #[cfg(test)]
 use zionstats_core::control::ControlConfig;
 use zionstats_core::control::{Command, ControlState, Controller, CoolingMode, TickInputs};
@@ -39,10 +39,10 @@ impl ControlStack {
             return (stack, warnings);
         }
         for p in &cfg.plugs {
-            match HttpPlug::from_config(p) {
-                Ok(Some(plug)) => stack.plugs.push(Box::new(plug)),
+            match plugs::from_config(p) {
+                Ok(Some(plug)) => stack.plugs.push(plug),
                 Ok(None) => warnings.push(format!(
-                    "plug {:?}: backend {:?} needs the Python daemon (zionstats --log) -- skipped",
+                    "plug {:?}: backend {:?} skipped (missing optional fields)",
                     p.name, p.backend
                 )),
                 Err(e) => warnings.push(format!("plug {:?}: {}", p.name, e)),

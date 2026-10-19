@@ -4,7 +4,7 @@
 //! is case-insensitive (real devices reply `POWER`, Python read `Power` —
 //! documented improvement).
 
-use super::actuators::{Plug, PlugError};
+use super::super::actuators::{Plug, PlugError};
 use crate::config::PlugCfg;
 
 fn http_get(url: &str) -> Result<String, PlugError> {
@@ -35,8 +35,8 @@ enum HttpKind {
 }
 
 impl HttpPlug {
-    /// Build from config; returns Ok(None) for non-HTTP backends (tuya,
-    /// kasa, ha, mock) so the daemon can warn/skip.
+    /// Build from config; only the HTTP backends route here (the
+    /// `plugs::from_config` factory dispatches first).
     pub fn from_config(cfg: &PlugCfg) -> Result<Option<HttpPlug>, String> {
         let kind = match cfg.backend.as_str() {
             "shelly" => {
@@ -47,9 +47,6 @@ impl HttpPlug {
                 }
             }
             "tasmota" => HttpKind::Tasmota,
-            "tuya" | "kasa" | "ha" => {
-                return Ok(None); // caller warns: Python daemon covers these
-            }
             other => return Err(format!("unknown plug backend {other:?}")),
         };
         if cfg.host.is_empty() {
@@ -206,16 +203,20 @@ mod tests {
     #[test]
     fn backend_routing() {
         let cfg = PlugCfg {
-            backend: "tuya".into(),
+            backend: "shelly".into(),
             name: "t".into(),
             host: "x".into(),
             gen: 3,
             channel: 0,
+            id: String::new(),
+            key: None,
+            address: None,
+            version: 3.3,
+            base_url: None,
+            token: None,
+            entity_id: None,
         };
-        assert!(
-            HttpPlug::from_config(&cfg).unwrap().is_none(),
-            "tuya defers to Python daemon"
-        );
+        assert!(HttpPlug::from_config(&cfg).unwrap().is_some());
         let bad = PlugCfg {
             backend: "nope".into(),
             ..cfg.clone()

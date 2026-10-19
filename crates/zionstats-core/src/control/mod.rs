@@ -6,7 +6,7 @@
 
 pub mod actuators;
 pub mod curve;
-pub mod plugs_http;
+pub mod plugs;
 
 use std::collections::VecDeque;
 use std::sync::Mutex;

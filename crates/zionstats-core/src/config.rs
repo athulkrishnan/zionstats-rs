@@ -32,6 +32,15 @@ pub struct PlugCfg {
     pub host: String,
     pub gen: u8,
     pub channel: u32,
+    // tuya (key names shared with the Python config)
+    pub id: String,
+    pub key: Option<String>,
+    pub address: Option<String>,
+    pub version: f32,
+    // home assistant
+    pub base_url: Option<String>,
+    pub token: Option<String>,
+    pub entity_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -238,12 +247,24 @@ pub fn load_verbose(path: &std::path::Path) -> (Config, Vec<String>) {
                 .and_then(as_f64)
                 .map(|f| f as u32)
                 .unwrap_or(0);
+            let opt = |k: &str| t.get(k).and_then(as_string).filter(|s| !s.is_empty());
             cfg.plugs.push(PlugCfg {
                 backend,
                 name,
                 host,
                 gen,
                 channel,
+                id: opt("id").unwrap_or_default(),
+                key: opt("key"),
+                address: opt("address"),
+                version: t
+                    .get("version")
+                    .and_then(as_f64)
+                    .map(|f| f as f32)
+                    .unwrap_or(3.3),
+                base_url: opt("base_url"),
+                token: opt("token"),
+                entity_id: opt("entity_id"),
             });
         }
     }
