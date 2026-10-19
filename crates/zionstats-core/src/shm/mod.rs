@@ -580,7 +580,7 @@ mod tests {
         let path = dir.path().join("v1file");
         // forge a header with the current magic/abi but layout_version 1
         use std::os::unix::fs::OpenOptionsExt;
-        let mut f = std::fs::OpenOptions::new()
+        let f = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
@@ -590,7 +590,7 @@ mod tests {
             .unwrap();
         f.set_len(TOTAL_SIZE as u64).unwrap();
         let mut map = unsafe { memmap2::MmapMut::map_mut(&f).unwrap() };
-        let mut h = ShmHeaderV1 {
+        let h = ShmHeaderV1 {
             magic: *SHM_MAGIC,
             abi_tag: ABI_TAG,
             layout_version: 1,
