@@ -1,3 +1,7 @@
+> NOTE (2026-10-19): these numbers are from the v0.5.0-era runs.
+> Regenerate with `./benches/run_all.sh` on the reference hardware after
+> v0.7.0; the harness is unchanged.  Not regenerated this cycle.
+
 # Benchmarks: zionstats-rs vs zionstats (Python)
 
 All numbers below were measured on the reference box and are regenerable:

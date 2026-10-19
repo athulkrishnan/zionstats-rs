@@ -2296,7 +2296,7 @@ dependencies = [
 
 [[package]]
 name = "zionstats"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "clap_complete",
@@ -2310,7 +2310,7 @@ dependencies = [
 
 [[package]]
 name = "zionstats-core"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2335,7 +2335,7 @@ dependencies = [
 
 [[package]]
 name = "zionstats-daemon"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "env_logger",
@@ -2354,7 +2354,7 @@ dependencies = [
 
 [[package]]
 name = "zionstats-tui"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "clap",
  "crossterm",

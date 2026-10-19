@@ -54,3 +54,16 @@ in it is pure or GPU-free-testable: the NVML source lives behind the
 - panic in a task -> logged, watchdog/restart path re-arms safe state
 - daemon killed -9 -> startup always calls `set_default_fan_speed` before
   the first control tick, so a dead session cannot leave manual PWM behind
+
+## v0.7 additions to the task model
+
+- The poll loop now refreshes weather on the provider's own cadence
+  (Open-Meteo, shared disk cache with the Python stack) and feeds live
+  ambient + weather age into the control tick; stale weather forces an
+  engaged plug OFF in auto+temp (usage trigger never reads weather).
+- SIGHUP sets a reload flag consumed between ticks: the control stack
+  is rebuilt (fan restore via Drop, plugs untouched, actuation belief
+  resets off, readback reconcile resyncs within one period).
+- A periodic readback window (readback_period_s) queries plug status
+  and wall-power meters; definitive all-plug statuses feed the
+  controller's external resync path.

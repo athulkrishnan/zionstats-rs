@@ -27,6 +27,14 @@ surface is deliberately small:
   too low can burn the GPU -- treat `fan_curve` as safety-critical
   configuration.
 
+## Network
+
+- Weather (optional): keyless HTTPS to Open-Meteo, 6 s timeout, disk
+  cache shared with the Python stack; disable with
+  `[weather] enabled = false`.  This is the only outbound call.
+- Plug control stays LAN-local plaintext (same posture as the sibling);
+  the new Tuya/Kasa/HA backends inherit it.  See docs/PLUGS.md.
+
 ## Data at rest
 
 - Shared memory `/dev/shm/zionstats-<uid>`: mode 0600, uid-scoped,

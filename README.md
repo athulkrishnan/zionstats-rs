@@ -62,11 +62,13 @@ reproduce commands there; RTX 4070 Ti SUPER, kernel 7.0.11):
 | controller tick | ~140 ns | n/a | pure state machine |
 | install footprint | 3 static binaries | interpreter + deps (or a PyInstaller bundle) | |
 
-**What Python still does better** (and stays fully supported):
-mature TUI polish (16 themes, options menu, mouse, presets), record/replay
-traces, the climate/weather layer, and Tuya/Kasa/Home-Assistant plug
-backends. The Rust daemon speaks Shelly and Tasmota natively today and
-refuses to fight the Python daemon for the same plug (flock).
+**What Python still does better** (and stays fully supported): mature
+TUI polish (options menu, mouse, presets, per-process forensics depth),
+and the richer verdict-chip set.  Everything else narrowed in v0.7.0:
+16 themes with a live picker, Python-compatible record/replay, the
+climate/weather layer with a shared observation cache, and Tuya/Kasa/HA
+plug backends are now native here too (Shelly/Tasmota were already).
+Both stacks refuse to fight for the same plug (flock).
 
 **Safety posture (inherited, not relaxed):** fan PWM and plug actuation
 ship off; the cooling controller is a line-by-line port of the Python
@@ -149,11 +151,40 @@ never block the writer. Byte map and protocol:
 | Prometheus + snapshot | yes (:9400) | yes (:9835) |
 | fan PWM control | yes (opt-in) | no |
 | Shelly / Tasmota plugs | yes | yes |
-| Tuya / Kasa / HA plugs | no (use Python daemon) | yes |
-| themes, mouse, presets, options menu | no | yes |
-| record / replay traces | no | yes |
-| climate / weather layer | no | yes |
+| Tuya / Kasa / HA plugs | yes (v0.7) | yes |
+| plug wall-power metering | yes (v0.7) | yes |
+| per-process GPU utilization | yes (v0.7, NVML FFI) | yes |
+| volatile ECC counters | yes (v0.7) | yes |
+| insights (session Wh, PCIe sat) | yes (v0.7) | yes |
+| climate / weather layer | yes (v0.7, shared cache) | yes |
+| SIGHUP config reload | yes (v0.7) | no |
+| 16 themes + live picker | yes (v0.7) | yes |
+| record / replay traces | yes (v0.7, python-compatible) | yes |
+| AMD / Intel sources | yes / experimental (v0.7) | yes / experimental |
+| man pages in release zips | yes (v0.7) | no |
+| themes mouse presets options menu | no | yes |
 | container + k8s process attribution | yes | no |
+
+## Ports
+
+The daemon defaults to `127.0.0.1:9400`, which dcgm-exporter also uses
+by convention -- set `[daemon] port` when running mixed stacks.  The
+Python exporter defaults to :9835 (nvitop-exporter compatible).
+
+## FAQ
+
+**"Failed to initialize NVML: Unknown Error" inside a container?**
+The cgroups v2 fix is `no-cgroups = true` in the nvidia-container-runtime
+config.
+
+**Per-process PIDs look wrong in containers?**  NVML's per-process APIs
+report HOST-namespace PIDs; this daemon's cgroup attribution resolves
+them to containers/pods correctly.  Run other tools on the host (or
+`--pid=host`).
+
+**RTX 50 memory-junction temperature?**  There is no documented NVML
+sensor for it on consumer Blackwell (nor a 12V-2x6 connector temp).
+Absent fields stay absent -- zionstats never synthesizes one.
 
 ## Platform support
 
@@ -162,10 +193,10 @@ driver for live metrics; `zionstats --demo` works anywhere.
 
 ## Roadmap
 
-- v0.6.x: SIGHUP hot-reload, per-process GPU utilization via raw NVML FFI,
-  ECC counters, man pages in release zips
-- v0.7: theme port, record/replay against SHM, Tuya bridge
-- See the Python repo for everything the mature TUI already does
+- v0.7.0 (this release): shipped everything listed above.
+- Next: GPM metrics, power-limit/clock actuation, alert push channels,
+  fleet/multi-host TUI.  See the Python repo for the mature TUI's
+  options menu, mouse, and presets.
 
 ## Sibling project
 
