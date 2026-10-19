@@ -77,6 +77,8 @@ pub struct ControlConfig {
     /// weather older than this inhibits auto+temp actuation (Python
     /// CoolingConfig.max_weather_age_s = 45 min)
     pub max_weather_age_s: f32,
+    /// periodic external plug readback cadence (Python CoolingConfig)
+    pub readback_period_s: f32,
 }
 
 impl Default for ControlConfig {
@@ -97,6 +99,7 @@ impl Default for ControlConfig {
             verify_delay_s: 0.4,
             ambient_temp_fallback_c: 30.0,
             max_weather_age_s: 45.0 * 60.0,
+            readback_period_s: 30.0,
         }
     }
 }

@@ -383,6 +383,50 @@ async fn run_async(opts: DaemonOpts) -> i32 {
                 _pad: [0; 4],
             })
             .collect();
+        // periodic external-readback reconciliation: query every plug's
+        // status each window so an app-side toggle resyncs within one
+        // period; the same window samples wall-power meters
+        let readback = {
+            let now_s = now_ms() as f64 / 1000.0;
+            let period = (control
+                .controller
+                .as_ref()
+                .map(|c| c.cfg.readback_period_s)
+                .unwrap_or(30.0))
+            .max(10.0) as f64;
+            if now_s - plug_last_sample_s >= period {
+                plug_last_sample_s = now_s;
+                let statuses: Vec<Option<bool>> = control
+                    .plugs
+                    .iter_mut()
+                    .map(|p| {
+                        let mut s = None;
+                        for _ in 0..1 {
+                            s = p.status();
+                        }
+                        s
+                    })
+                    .collect();
+                let readings = control.sample_power();
+                crate::control_task::integrate_plug_energy(
+                    &mut plug_energy,
+                    &mut plug_last,
+                    plug_prev_ts,
+                    now_s,
+                    &readings,
+                );
+                plug_prev_ts = Some(now_s);
+                let real: Vec<_> = statuses.iter().flatten().copied().collect();
+                if !statuses.is_empty() && real.len() == statuses.len() {
+                    Some(real.iter().all(|b| *b))
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
         // control tick: decision + actuator dispatch (blocking; a slow
         // plug delays the tick but the interval ticker skips, so no drift)
         {
@@ -407,7 +451,7 @@ async fn run_async(opts: DaemonOpts) -> i32 {
                             .unwrap_or(0)) as f64
                         / 1000.0,
                 ),
-                readback: None,
+                readback,
                 ambient_c: Some(ambient_c),
                 weather_age_s,
             });
@@ -443,24 +487,6 @@ async fn run_async(opts: DaemonOpts) -> i32 {
                     }
                 }
                 current_weather = Some(w);
-            }
-        }
-
-        // wall-power sampling (30 s cadence until WI-8 unifies it with the
-        // config readback period)
-        {
-            let now_s = now_ms() as f64 / 1000.0;
-            if now_s - plug_last_sample_s >= 30.0 {
-                plug_last_sample_s = now_s;
-                let readings = control.sample_power();
-                crate::control_task::integrate_plug_energy(
-                    &mut plug_energy,
-                    &mut plug_last,
-                    plug_prev_ts,
-                    now_s,
-                    &readings,
-                );
-                plug_prev_ts = Some(now_s);
             }
         }
 

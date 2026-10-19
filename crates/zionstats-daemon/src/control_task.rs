@@ -296,6 +296,61 @@ mod tests {
     }
 
     #[test]
+    fn readback_resync_bypass_and_none_noop() {
+        // WI-8 wiring proof at the stack level: an externally-toggled plug
+        // resyncs belief, the immediate re-fire bypasses min-on/off, and a
+        // None readback changes nothing.
+        use zionstats_core::control::Trigger;
+        let (clock, f) = shared_clock(1000.0);
+        let mut stack = ControlStack::default();
+        let lie = MockPlug::new("liar");
+        stack.plugs.push(Box::new(lie));
+        stack.controller = Some(Controller::new(
+            ControlConfig {
+                mode: CoolingMode::Auto,
+                trigger: Trigger::Usage,
+                verify_delay_s: 0.0,
+                ..Default::default()
+            },
+            f,
+        ));
+        let shutdown = AtomicBool::new(false);
+        let load = TickInputs {
+            temp_c: Some(50.0),
+            util_pct: Some(40.0),
+            sample_age_s: Some(0.0),
+            ambient_c: Some(30.0),
+            readback: None,
+            weather_age_s: Some(0.0),
+        };
+        assert!(matches!(stack.tick(&load, &shutdown), Some(_)));
+        assert!(stack.controller.as_ref().unwrap().state.on, "engaged");
+
+        // external OFF toggle: the daemon-collected readback reports false
+        // while the controller believes ON.  Python parity: the belief
+        // resyncs to false, then the same tick re-fires ON through the
+        // external_resync bypass -- WITHOUT the bypass the min-off window
+        // (clock 1000, engaged at 1000, min_off 180 s) would hold.  The
+        // end state proves the bypass fired.
+        let rb_off = TickInputs {
+            readback: Some(false),
+            ..load
+        };
+        stack.tick(&rb_off, &shutdown);
+        assert!(
+            stack.controller.as_ref().unwrap().state.on,
+            "resync + same-tick bypass re-fire (min-off would have held)"
+        );
+
+        // None readback is a no-op (no statuses this window)
+        stack.tick(&load, &shutdown);
+        assert!(
+            stack.controller.as_ref().unwrap().state.on,
+            "None = no resync"
+        );
+    }
+
+    #[test]
     fn plug_dispatch_end_to_end_with_mock() {
         // build a stack with a MockPlug wired in by hand (config path only
         // makes HttpPlugs); drive a usage-trigger ON/OFF cycle
