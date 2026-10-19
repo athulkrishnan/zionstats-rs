@@ -230,6 +230,7 @@ pub const PYTHON_PROCESS_FIELDS: &[&str] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::source::replay::TraceFrame;
     use std::time::{Duration, UNIX_EPOCH};
 
     fn s() -> Sample {
