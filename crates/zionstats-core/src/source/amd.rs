@@ -18,7 +18,6 @@ pub const VENDOR_ID: &str = "0x1002";
 const MAX_CLIENTS: usize = 256;
 
 pub struct AmdSource {
-    sysfs_root: PathBuf,
     proc_root: PathBuf,
     cards: Vec<PathBuf>,
     client_ring: HashMap<String, HashMap<String, u64>>,
@@ -141,7 +140,6 @@ impl AmdSource {
             return Err(SourceError::NoDevices);
         }
         Ok(AmdSource {
-            sysfs_root: sysfs_root.to_path_buf(),
             proc_root: proc_root.to_path_buf(),
             cards,
             client_ring: HashMap::new(),

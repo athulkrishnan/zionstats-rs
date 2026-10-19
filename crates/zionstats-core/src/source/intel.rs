@@ -20,7 +20,6 @@ pub const VENDOR_ID: &str = "0x8086";
 const MAX_CLIENTS: usize = 256;
 
 pub struct IntelSource {
-    sysfs_root: PathBuf,
     proc_root: PathBuf,
     cards: Vec<(PathBuf, String)>, // (device dir, driver)
     client_ring: HashMap<String, HashMap<String, u64>>,
@@ -83,7 +82,6 @@ impl IntelSource {
             return Err(SourceError::NoDevices);
         }
         Ok(IntelSource {
-            sysfs_root: sysfs_root.to_path_buf(),
             proc_root: proc_root.to_path_buf(),
             cards,
             client_ring: HashMap::new(),
